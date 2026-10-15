@@ -14,4 +14,4 @@ self.FIREBASE_CONFIG = {
 };
 
 // Configuración del proyecto > Cloud Messaging > Certificados push web > Par de claves (clave pública)
-self.VAPID_KEY = '';
+self.VAPID_KEY = 'BDPTUHtdnW-E6Tc6YWKVAR7cD8uQfVkfxW4agXt5jxBo3NMatnBDcUEBy3fILWbQeIk4jAo4rwGfeIib7FPqrcw';
