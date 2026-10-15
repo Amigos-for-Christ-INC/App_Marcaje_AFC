@@ -113,6 +113,7 @@ window.addEventListener('load', function(){
   .scroll{overflow-x:auto}
   a{color:var(--azul)}
   .vacio{color:var(--suave);text-align:center;padding:18px 8px}
+  .aviso button{background:var(--blanco);color:var(--navy);margin-top:10px}
   .aviso{background:var(--navy);color:var(--blanco);border-radius:8px;padding:10px 12px;font-size:14px;margin-top:12px}
 
   #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--navy);color:var(--blanco);padding:12px 18px;border-radius:8px;width:max-content;max-width:90%;z-index:9;font-weight:500}
@@ -212,6 +213,10 @@ window.addEventListener('load', function(){
         <div id="gps" class="gps"><span class="punto"></span><span id="gpsTxt">Buscando tu ubicación…</span></div>
         <p style="text-align:center;margin:4px 0 0"><button class="link" onclick="revisarGps()">Actualizar ubicación</button></p>
         <p id="colaInfo" class="aviso oculto"></p>
+        <div id="pushBanner" class="aviso oculto">
+          <span>¿Quieres que te avisemos si se te olvida marcar la entrada o la salida?</span>
+          <button onclick="activarRecordatorios()">Activar recordatorios</button>
+        </div>
         <div class="registro">
           <div><b id="rEntrada">--:--</b>Entrada</div>
           <div><b id="rSalida">--:--</b>Salida</div>
@@ -254,6 +259,13 @@ window.addEventListener('load', function(){
       <label for="ccNueva">Nueva contraseña</label><input id="ccNueva" type="password" autocomplete="new-password" placeholder="Mínimo 6 caracteres">
       <label for="ccNueva2">Repite la contraseña</label><input id="ccNueva2" type="password" autocomplete="new-password">
       <button onclick="cambiarClave('cc')">Cambiar contraseña</button>
+      <h2>Recordatorios</h2>
+      <p class="sub" id="pushEstado"></p>
+      <button id="btnPushActivar" class="oculto" onclick="activarRecordatorios()">Activar recordatorios</button>
+      <div id="pushActivos" class="fila oculto">
+        <button class="sec" onclick="probarPush()">Enviar prueba</button>
+        <button class="sec" onclick="desactivarPush()">Desactivar</button>
+      </div>
       <h2>Mi lugar de trabajo</h2>
       <p class="sub" id="miLugar"></p>
       <button class="sec" onclick="salir()">Cerrar sesión</button>
@@ -333,6 +345,9 @@ window.addEventListener('load', function(){
           <button onclick="guardarAvisos()">Guardar correos</button>
           <button class="sec" onclick="probarAviso()">Enviar prueba</button>
         </div>
+        <h2>Recordatorios de marcaje</h2>
+        <p class="sub" id="recEstado">Consultando…</p>
+        <button class="sec oculto" id="btnRecActivar" onclick="activarRecAdmin()">Activar recordatorios automáticos</button>
       </div>
       <p class="sub" style="margin-top:14px">Para cargar muchos empleados de una vez, pégalos en la hoja Empleados (Correo, Nombre, Cargo, Lugar, Activo, y en la columna Rol: Empleado, Supervisor, RRHH o Admin). <a id="linkHoja" target="_blank" href="#">Abrir la hoja de cálculo</a></p>
     </div>
@@ -424,6 +439,8 @@ window.addEventListener('load', function(){
 <div id="cargando" class="oculto">Un momento…</div>
 
 <script src="config.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
 <script>
 /* Conexión con el servidor (Apps Script). Imita google.script.run para que el resto
    del código funcione igual que dentro de Google. */
@@ -573,6 +590,8 @@ function iniciar(r){
   pintarCola();
   if (cola().length) sincronizar();
   revisarGps();
+  pintarPush();
+  refrescarPush();
 }
 async function entrar(){
   const correo = $('lgCorreo').value.trim(), clave = $('lgClave').value;
@@ -583,7 +602,7 @@ async function entrar(){
 }
 function salir(){
   if (S.token) google.script.run.cerrarSesion(S.token);
-  S.token = ''; S.datos = null; store('mk_tok'); store('mk_ses'); store('mk_est');
+  S.token = ''; S.datos = null; store('mk_tok'); store('mk_ses'); store('mk_est'); store('mk_push');
   ver('vLogin');
 }
 function abrirRecuperar(){
@@ -822,6 +841,7 @@ async function cargarAdmin(){
   $('linkHoja').classList.toggle('oculto', !r.url);
   $('linkHoja').href = r.url || '#';
   pintarRoles();
+  cargarRecordatorios();
   $('rLugar').innerHTML = '<option value="">Todos</option>' + r.lugares.map(l => '<option>' + esc(l.nombre) + '</option>').join('') + '<option value="LIBRE">Libre</option>';
   pintarHoy();
   $('badgePend').textContent = r.pendientes.length ? '(' + r.pendientes.length + ')' : '';
@@ -983,6 +1003,86 @@ async function activarResp(){
   toast(await call('activarRespaldoMensual', S.adm));
   cargarRespaldo();
 }
+
+/* ===== Recordatorios por notificación (Firebase) ===== */
+let fbMsg = null;
+function pushConfigurado(){ const c = window.FIREBASE_CONFIG; return !!(c && c.apiKey && c.projectId && window.VAPID_KEY); }
+function pushPosible(){ return pushConfigurado() && typeof firebase !== 'undefined' && 'serviceWorker' in navigator && 'Notification' in window && window.isSecureContext; }
+async function prepararFirebase(){
+  if (fbMsg) return fbMsg;
+  if (!pushPosible()) return null;
+  try { if (!(await firebase.messaging.isSupported())) return null; } catch(e){ return null; }
+  if (!firebase.apps.length) firebase.initializeApp(window.FIREBASE_CONFIG);
+  fbMsg = firebase.messaging();
+  fbMsg.onMessage(p => { const n = (p && p.notification) || {}; toast((n.title || 'Aviso') + '. ' + (n.body || '')); });
+  return fbMsg;
+}
+function plataforma(){ return esIOS ? 'iPhone' : esAndroid ? 'Android' : 'Computadora'; }
+function pushActivo(){ return pushPosible() && Notification.permission === 'granted' && !!leer('mk_push'); }
+function pintarPush(){
+  if (!$('pushEstado')) return;
+  const conf = pushConfigurado(), iosSinInstalar = esIOS && !yaInstalada;
+  const bloqueado = 'Notification' in window && Notification.permission === 'denied';
+  let txt, banner = false;
+  if (!conf) txt = 'Los recordatorios todavía no están configurados por administración.';
+  else if (iosSinInstalar) { txt = 'En iPhone, primero instala la app (Compartir → Agregar a inicio) y ábrela desde el icono.'; banner = true; }
+  else if (bloqueado) txt = 'Bloqueaste las notificaciones. Actívalas en los ajustes del navegador para esta página.';
+  else if (!pushPosible()) txt = 'Este navegador no permite notificaciones. Usa Chrome en Android, o la app instalada en iPhone.';
+  else if (pushActivo()) txt = 'Activados en este teléfono. Te avisaremos si se te olvida marcar.';
+  else { txt = 'Te avisamos por notificación si se te olvida marcar la entrada o la salida.'; banner = true; }
+  $('pushEstado').textContent = txt;
+  $('btnPushActivar').classList.toggle('oculto', !(conf && !pushActivo() && !bloqueado && (pushPosible() || iosSinInstalar)));
+  $('pushActivos').classList.toggle('oculto', !pushActivo());
+  $('pushBanner').classList.toggle('oculto', !(conf && banner));
+}
+async function activarRecordatorios(){
+  if (esIOS && !yaInstalada) return abrirDlg('dlgIos');
+  const m = await prepararFirebase();
+  if (!m) { toast('Este teléfono o navegador no permite notificaciones.', true); return pintarPush(); }
+  let perm;
+  try { perm = await Notification.requestPermission(); } catch(e) { perm = Notification.permission; }
+  if (perm !== 'granted') { toast('Para recibir recordatorios tienes que permitir las notificaciones.', true); return pintarPush(); }
+  try {
+    carga(true);
+    const reg = await navigator.serviceWorker.ready;
+    const t = await m.getToken({ vapidKey: window.VAPID_KEY, serviceWorkerRegistration: reg });
+    carga(false);
+    if (!t) throw new Error('el teléfono no entregó el identificador');
+    toast(await call('registrarDispositivo', S.token, t, plataforma()));
+    store('mk_push', t);
+  } catch(e) { carga(false); if (e && e.message) toast('No se pudieron activar: ' + e.message, true); }
+  pintarPush();
+}
+// Al abrir la app: si ya dio permiso, renueva el identificador en silencio (cambia de vez en cuando)
+async function refrescarPush(){
+  try {
+    if (!pushPosible() || Notification.permission !== 'granted' || !S.token) return;
+    const m = await prepararFirebase(); if (!m) return;
+    const reg = await navigator.serviceWorker.ready;
+    const t = await m.getToken({ vapidKey: window.VAPID_KEY, serviceWorkerRegistration: reg });
+    if (t && t !== leer('mk_push')) google.script.run.withSuccessHandler(() => { store('mk_push', t); pintarPush(); }).registrarDispositivo(S.token, t, plataforma());
+  } catch(e) {}
+}
+async function probarPush(){ toast(await call('probarNotificacion', S.token)); }
+async function desactivarPush(){
+  const t = leer('mk_push');
+  if (t) await call('quitarDispositivo', S.token, t);
+  try { const m = await prepararFirebase(); if (m) await m.deleteToken(); } catch(e) {}
+  store('mk_push'); toast('Recordatorios desactivados en este teléfono.'); pintarPush();
+}
+// Panel de administración
+function diasTxt(d){ const n = ['', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom']; return String(d).split(',').map(x => n[Number(x)] || x).join(', '); }
+function cargarRecordatorios(){
+  if (!S.A || S.A.yo.rol !== 'Admin') return;
+  google.script.run.withSuccessHandler(r => {
+    $('recEstado').innerHTML = (r.firebase ? '' : '<b>Falta configurar Firebase en Apps Script.</b> ') +
+      (r.activo ? 'Revisión automática activa. ' : '<b>La revisión automática no está activa.</b> ') +
+      r.personas + ' personas con recordatorios (' + r.telefonos + ' teléfonos). Días: ' + esc(diasTxt(r.dias)) +
+      '. Avisos de entrada: ' + esc(r.entrada) + '. Aviso de salida: ' + esc(r.salida) + '. Los horarios se cambian en la hoja Config.';
+    $('btnRecActivar').classList.toggle('oculto', r.activo);
+  }).withFailureHandler(e => { $('recEstado').textContent = 'No se pudo consultar: ' + ((e && e.message) || e); }).estadoRecordatorios(S.adm);
+}
+async function activarRecAdmin(){ toast(await call('activarRecordatorios', S.adm)); cargarRecordatorios(); }
 
 /* ===== Instalar como app ===== */
 let promptInstalar = null;
