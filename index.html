@@ -119,6 +119,14 @@ window.addEventListener('load', function(){
   #toast.err{background:var(--alerta)}
   #cargando{position:fixed;inset:0;background:rgba(245,237,236,.75);display:flex;align-items:center;justify-content:center;z-index:8;font:700 20px Raleway,sans-serif;color:var(--navy)}
   footer{text-align:center;color:var(--texto);font-size:12px;margin-top:30px;font-weight:300}
+  /* Botón instalar app */
+  .btn-instalar{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:auto;margin:14px auto 0;padding:10px 18px;border-radius:10px;font-weight:700;min-height:42px;background:var(--azul);color:var(--blanco)}
+  button.ayuda-instalar{display:table;margin:6px auto 0;font-size:13px}
+  dialog.dlg{border:0;border-radius:12px;padding:20px;max-width:360px;width:calc(100% - 32px);color:var(--texto);background:var(--blanco)}
+  dialog.dlg::backdrop{background:rgba(10,34,64,.55)}
+  dialog.dlg h3{margin:0 0 8px;color:var(--navy);font-size:18px}
+  dialog.dlg p,dialog.dlg li{font-size:14px;margin:6px 0}
+  dialog.dlg ol,dialog.dlg ul{padding-left:20px;margin:8px 0}
 </style>
 </head>
 <body>
@@ -130,6 +138,8 @@ window.addEventListener('load', function(){
       <div class="logo-color" role="img" aria-label="Amigos for Christ"></div>
       <h1>Control de asistencia</h1>
       <p class="sub">Entra con tu correo y contraseña.</p>
+      <button class="btn-instalar oculto" id="btnInstalar" onclick="instalarApp()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-4-4m4 4 4-4"/><path d="M5 21h14"/></svg>Instalar app</button>
+      <button class="link ayuda-instalar oculto" id="ayudaInstalar" onclick="abrirDlg('dlgAyuda')">¿No se instala?</button>
     </div>
     <div class="tarjeta">
       <div class="reloj" data-reloj></div>
@@ -379,6 +389,37 @@ window.addEventListener('load', function(){
   <footer>Creada y de autoría del Ing. Moisés Mendoza</footer>
 </div>
 
+<dialog class="dlg" id="dlgIos">
+  <h3>Instalar en iPhone o iPad</h3>
+  <ol>
+    <li>Abre esta página en <b>Safari</b>.</li>
+    <li>Toca el botón <b>Compartir</b> (el cuadrito con la flecha hacia arriba).</li>
+    <li>Elige <b>Agregar a inicio</b> y toca <b>Agregar</b>.</li>
+  </ol>
+  <button onclick="cerrarDlg('dlgIos')">Entendido</button>
+</dialog>
+<dialog class="dlg" id="dlgNavegador">
+  <h3>Ábrela en tu navegador</h3>
+  <p>Estás dentro de otra app (WhatsApp, Facebook u otra) y desde ahí no se puede instalar.</p>
+  <ol>
+    <li>Toca el menú <b>⋮</b> o <b>···</b> de arriba.</li>
+    <li>Elige <b>Abrir en Chrome</b> (Android) o <b>Abrir en Safari</b> (iPhone).</li>
+    <li>Ahí toca <b>Instalar app</b>.</li>
+  </ol>
+  <button class="sec" onclick="copiarEnlace()">Copiar enlace</button>
+  <button onclick="cerrarDlg('dlgNavegador')">Entendido</button>
+</dialog>
+<dialog class="dlg" id="dlgAyuda">
+  <h3>Si no se instala</h3>
+  <ul>
+    <li>Usa <b>Chrome</b>: menú <b>⋮</b> → <b>Instalar app</b> o <b>Agregar a pantalla principal</b>.</li>
+    <li><b>Xiaomi, Redmi, POCO, Oppo, Realme o Vivo:</b> Ajustes → Aplicaciones → Chrome → Permisos → activa <b>Accesos directos de pantalla de inicio</b>. Luego vuelve a intentar.</li>
+    <li><b>Huawei u Honor:</b> menú del navegador → <b>Agregar a pantalla de inicio</b>.</li>
+    <li>Actualiza <b>Chrome</b> y <b>Servicios de Google Play</b> en Play Store, y usa wifi.</li>
+    <li>Si ya la instalaste, búscala en tu pantalla de inicio o en el cajón de apps.</li>
+  </ul>
+  <button onclick="cerrarDlg('dlgAyuda')">Entendido</button>
+</dialog>
 <div id="toast" class="oculto"></div>
 <div id="cargando" class="oculto">Un momento…</div>
 
@@ -935,6 +976,44 @@ async function respaldarYa(){
 async function activarResp(){
   toast(await call('activarRespaldoMensual', S.adm));
   cargarRespaldo();
+}
+
+/* ===== Instalar como app ===== */
+let promptInstalar = null;
+const esIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const esAndroid = /android/i.test(navigator.userAgent);
+const enAppAjena = /FBAN|FBAV|FB_IAB|Instagram|WhatsApp|Messenger|Line\/|; wv\)/i.test(navigator.userAgent);
+const yaInstalada = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function mostrarInstalar(si){
+  $('btnInstalar').classList.toggle('oculto', !si);
+  $('ayudaInstalar').classList.toggle('oculto', !si || esIOS || enAppAjena);
+}
+function abrirDlg(id){ const d = $(id); if (d.showModal) d.showModal(); else d.setAttribute('open', ''); }
+function cerrarDlg(id){ const d = $(id); if (d.close) d.close(); else d.removeAttribute('open'); }
+function copiarEnlace(){
+  const url = location.origin + location.pathname;
+  try { navigator.clipboard.writeText(url).then(() => toast('Enlace copiado. Pégalo en Chrome o Safari.')); }
+  catch (e) { prompt('Copia este enlace:', url); }
+}
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); promptInstalar = e; mostrarInstalar(true); });
+window.addEventListener('appinstalled', () => { promptInstalar = null; mostrarInstalar(false); toast('App instalada. Búscala en tu pantalla de inicio.'); });
+if (!yaInstalada && (esIOS || enAppAjena)) mostrarInstalar(true);
+// Algunos Android no avisan que se puede instalar: mostrar el botón con ayuda
+if (!yaInstalada && esAndroid) setTimeout(() => { if (!promptInstalar) mostrarInstalar(true); }, 3000);
+async function instalarApp(){
+  if (promptInstalar) {
+    promptInstalar.prompt();
+    const r = await promptInstalar.userChoice;
+    promptInstalar = null;
+    if (r.outcome === 'accepted') mostrarInstalar(false);
+    return;
+  }
+  if (enAppAjena) {
+    if (esAndroid) { location.href = 'intent://' + location.host + location.pathname + '#Intent;scheme=https;package=com.android.chrome;end'; return; }
+    return abrirDlg('dlgNavegador');
+  }
+  if (esIOS) return abrirDlg('dlgIos');
+  abrirDlg('dlgAyuda');
 }
 
 // Abre la sesión guardada cuando no hay internet al abrir la app
