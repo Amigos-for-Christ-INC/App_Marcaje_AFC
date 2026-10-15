@@ -1,6 +1,15 @@
-// Service worker: guarda la app en el teléfono para que abra sin internet.
+// Service worker: guarda la app en el teléfono para que abra sin internet
+// y recibe las notificaciones de recordatorio (Firebase) aunque la app esté cerrada.
+importScripts('config.js');
+if (self.FIREBASE_CONFIG && self.FIREBASE_CONFIG.apiKey) {
+  importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js',
+                'https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js');
+  firebase.initializeApp(self.FIREBASE_CONFIG);
+  firebase.messaging();   // muestra las notificaciones que llegan con la app cerrada
+}
+
 // Al cambiar archivos de la app, sube el número de VERSION para que los teléfonos se actualicen.
-const VERSION = 'asistencia-v3';
+const VERSION = 'asistencia-v4';
 const BASE = ['./', './index.html', './config.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png'];
 
