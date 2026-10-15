@@ -120,6 +120,10 @@ window.addEventListener('load', function(){
   #toast.err{background:var(--alerta)}
   #cargando{position:fixed;inset:0;background:rgba(245,237,236,.75);display:flex;align-items:center;justify-content:center;z-index:8;font:700 20px Raleway,sans-serif;color:var(--navy)}
   footer{text-align:center;color:var(--texto);font-size:12px;margin-top:30px;font-weight:300}
+  /* Botón Entrar con Microsoft */
+  .btn-ms{display:flex;align-items:center;justify-content:center;gap:10px;background:var(--blanco);color:#5E5E5E;border:1.5px solid #8C8C8C;font-weight:600}
+  .separador{display:flex;align-items:center;gap:10px;color:var(--suave);font-size:13px;margin:16px 0 4px}
+  .separador:before,.separador:after{content:"";flex:1;border-top:1px solid var(--gris-neutro)}
   /* Botón instalar app */
   .btn-instalar{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:auto;margin:14px auto 0;padding:10px 18px;border-radius:10px;font-weight:700;min-height:42px;background:var(--azul);color:var(--blanco)}
   button.ayuda-instalar{display:table;margin:6px auto 0;font-size:13px}
@@ -138,19 +142,25 @@ window.addEventListener('load', function(){
     <div class="bienvenida">
       <div class="logo-color" role="img" aria-label="Amigos for Christ"></div>
       <h1>Control de asistencia</h1>
-      <p class="sub">Entra con tu correo y contraseña.</p>
+      <p class="sub" id="lgSub">Entra con tu correo y contraseña.</p>
       <button class="btn-instalar oculto" id="btnInstalar" onclick="instalarApp()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-4-4m4 4 4-4"/><path d="M5 21h14"/></svg>Instalar app</button>
       <button class="link ayuda-instalar oculto" id="ayudaInstalar" onclick="abrirDlg('dlgAyuda')">¿No se instala?</button>
     </div>
     <div class="tarjeta">
       <div class="reloj" data-reloj></div>
       <div class="fecha" data-fecha></div>
-      <label for="lgCorreo">Correo</label>
-      <input id="lgCorreo" type="email" autocomplete="username" inputmode="email" placeholder="nombre@correo.com">
-      <label for="lgClave">Contraseña</label>
-      <input id="lgClave" type="password" autocomplete="current-password">
-      <button onclick="entrar()">Entrar</button>
-      <button class="sec" onclick="abrirRecuperar()">Crear o recuperar contraseña</button>
+      <div id="lgMs" class="oculto">
+        <button class="btn-ms" onclick="entrarMicrosoft()"><svg width="20" height="20" viewBox="0 0 21 21" aria-hidden="true"><rect x="1" y="1" width="9" height="9" fill="#F25022"/><rect x="11" y="1" width="9" height="9" fill="#7FBA00"/><rect x="1" y="11" width="9" height="9" fill="#00A4EF"/><rect x="11" y="11" width="9" height="9" fill="#FFB900"/></svg>Entrar con Microsoft</button>
+        <p class="separador" id="lgSep"><button class="link" onclick="mostrarClaveApp()">o con correo y contraseña de la app</button></p>
+      </div>
+      <div id="lgClaveApp">
+        <label for="lgCorreo">Correo</label>
+        <input id="lgCorreo" type="email" autocomplete="username" inputmode="email" placeholder="nombre@correo.com">
+        <label for="lgClave">Contraseña</label>
+        <input id="lgClave" type="password" autocomplete="current-password">
+        <button onclick="entrar()">Entrar</button>
+        <button class="sec" onclick="abrirRecuperar()">Crear o recuperar contraseña</button>
+      </div>
     </div>
     <p style="text-align:center"><button class="link" onclick="ver('vAdminLogin')">Administración</button></p>
   </section>
@@ -441,6 +451,7 @@ window.addEventListener('load', function(){
 <script src="config.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
+<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
 <script>
 /* Conexión con el servidor (Apps Script). Imita google.script.run para que el resto
    del código funcione igual que dentro de Google. */
@@ -1135,9 +1146,61 @@ function iniciarSinConexion(){
   toast('Sin internet: puedes marcar igual. Se subirá cuando vuelva la conexión.');
 }
 
+/* ===== Entrar con Microsoft 365 ===== */
+let msApp = null;
+function msConfigurado(){ return !!(window.MS_CLIENT_ID && window.MS_TENANT_ID && window.msal && window.msal.PublicClientApplication); }
+function urlRegreso(){ return location.origin + location.pathname.replace(/index\.html$/, ''); }
+async function prepararMs(){
+  if (msApp) return msApp;
+  if (!msConfigurado()) return null;
+  msApp = new msal.PublicClientApplication({
+    auth: { clientId: window.MS_CLIENT_ID, authority: 'https://login.microsoftonline.com/' + window.MS_TENANT_ID, redirectUri: urlRegreso() },
+    cache: { cacheLocation: 'localStorage' }
+  });
+  if (msApp.initialize) await msApp.initialize();
+  return msApp;
+}
+function pintarLoginMs(){
+  const si = msConfigurado();
+  $('lgMs').classList.toggle('oculto', !si);
+  $('lgClaveApp').classList.toggle('oculto', si && !S.verClaveApp);
+  $('lgSep').classList.toggle('oculto', !!S.verClaveApp);
+  $('lgSub').textContent = si ? 'Entra con tu cuenta de Microsoft de la organización.' : 'Entra con tu correo y contraseña.';
+}
+function mostrarClaveApp(){ S.verClaveApp = true; pintarLoginMs(); }
+async function entrarMicrosoft(){
+  if (!navigator.onLine) return toast('Necesitas internet para entrar con Microsoft.', true);
+  const m = await prepararMs();
+  if (!m) return toast('El inicio con Microsoft no está disponible en este momento.', true);
+  carga(true);
+  m.loginRedirect({ scopes: ['User.Read'], prompt: 'select_account' });
+}
+// Cuando Microsoft devuelve al empleado a la app
+async function revisarRegresoMicrosoft(){
+  try {
+    if (!/[#&?](code|error)=/.test(location.hash + location.search)) { const m0 = await prepararMs(); if (m0) await m0.handleRedirectPromise().catch(() => null); return false; }
+    const m = await prepararMs(); if (!m) return false;
+    carga(true);
+    const r = await m.handleRedirectPromise();
+    if (!r || !r.accessToken) { carga(false); return false; }
+    history.replaceState(null, '', urlRegreso());
+    const datos = await call('loginMicrosoft', r.accessToken);
+    iniciar(datos);
+    return true;
+  } catch (e) {
+    carga(false);
+    const m = (e && e.message) || String(e);
+    if (!/user_cancelled|interaction_in_progress/.test(m)) toast('No se pudo entrar con Microsoft: ' + m.replace('SESION:', ''), true);
+    history.replaceState(null, '', urlRegreso());
+    return false;
+  }
+}
+
 /* Inicio: recupera la sesión guardada en este teléfono */
-(function(){
+(async function(){
   $('lgCorreo').value = leer('mk_correo');
+  pintarLoginMs();
+  if (await revisarRegresoMicrosoft()) return;
   const t = leer('mk_tok');
   if (t) google.script.run.withSuccessHandler(iniciar).withFailureHandler(function(e){
     const m = (e && e.message) || String(e);
