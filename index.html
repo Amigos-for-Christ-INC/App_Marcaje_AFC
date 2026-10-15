@@ -643,6 +643,7 @@ async function ponchar(){
       carga(false);
       const m = (e && e.message) || String(e);
       if (esErrorDeRed(m)) return marcarSinConexion(p);
+      if (esSaturacion(m)) return marcarSinConexion(p, 'ocupado');
       if (m.indexOf('SESION:') >= 0) { S.token = ''; store('mk_tok'); ver('vLogin'); return toast(m.split('SESION:')[1].trim(), true); }
       toast(m, true);
     })
@@ -682,7 +683,11 @@ function horaTexto(ms){
   const d = new Date(ms), z = n => String(n).padStart(2, '0');
   return z(d.getHours()) + ':' + z(d.getMinutes()) + ':' + z(d.getSeconds());
 }
-function marcarSinConexion(p){
+// El servidor de Google está atendiendo a mucha gente a la vez: la marca se guarda en el teléfono
+function esSaturacion(m){
+  return /mucha gente marcando|simult|too many|demasiad|invoked|l[ií]mite|limit|no respondi[oó] bien|tiempo de espera|timed out|exceeded/i.test(String(m));
+}
+function marcarSinConexion(p, motivo){
   const est = S.estadoActual || { fase:'entrada' };
   if (est.fase === 'listo') return toast('Ya marcaste entrada y salida hoy.', true);
   const ev = evaluarPos(p);
@@ -691,7 +696,7 @@ function marcarSinConexion(p){
   const tCorr = tDev + (S.ancla ? S.ancla.offset : 0);
   const tMono = S.ancla && !S.ancla.sinMono ? Math.round(S.ancla.server + (performance.now() - S.ancla.perf)) : 0;
   const c = cola();
-  c.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8), tipo: est.fase,
+  c.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8), tipo: est.fase, motivo: motivo || 'sin_red',
            tCorr: tCorr, tMono: tMono, lat: p.lat, lng: p.lng, prec: p.prec });
   guardarCola(c);
   const hora = horaTexto(tCorr);
@@ -702,7 +707,7 @@ function marcarSinConexion(p){
     let d = s2(hora) - s2(est.entrada || hora); if (d < 0) d += 86400;
     pintarEstado({ fase:'listo', entrada: est.entrada, salida: hora, horas: (d / 3600).toFixed(2) });
   }
-  toast('Sin internet: tu ' + est.fase + ' quedó guardada a las ' + hora.slice(0, 5) + '. Se subirá sola.');
+  toast((motivo === 'ocupado' ? 'Hay mucha gente marcando: tu ' : 'Sin internet: tu ') + est.fase + ' quedó guardada a las ' + hora.slice(0, 5) + '. Se subirá sola en un momento.');
 }
 let sincronizando = false;
 function sincronizar(){
@@ -715,7 +720,7 @@ function sincronizar(){
         sincronizando = false;
         anclar(r.ahoraMs);
         guardarCola(cola().filter(m => r.ok.indexOf(m.id) < 0));
-        if (r.ok.length) { pintarEstado(r.estado); toast(r.ok.length === 1 ? 'Se subió la marca que hiciste sin conexión.' : 'Se subieron ' + r.ok.length + ' marcas hechas sin conexión.'); }
+        if (r.ok.length) { pintarEstado(r.estado); toast(r.ok.length === 1 ? 'Se subió la marca guardada en el teléfono.' : 'Se subieron ' + r.ok.length + ' marcas guardadas en el teléfono.'); }
         res();
       })
       .withFailureHandler(e => {
@@ -729,7 +734,8 @@ function sincronizar(){
 }
 window.addEventListener('online', () => { pintarCola(); sincronizar(); });
 window.addEventListener('offline', pintarCola);
-setInterval(() => { if (cola().length) sincronizar(); }, 60000);
+// Reintenta subir cada 40 a 80 segundos (al azar, para que no lleguen todos al mismo tiempo)
+(function reintentar(){ setTimeout(() => { if (cola().length) sincronizar(); reintentar(); }, 40000 + Math.random() * 40000); })();
 
 async function cargarHist(){
   const rows = await call('misMarcas', S.token);
