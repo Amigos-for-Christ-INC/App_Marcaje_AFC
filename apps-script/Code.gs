@@ -986,16 +986,36 @@ function enviarPush_(lista) {
 }
 
 function minutos_(hhmm) { const p = String(hhmm).split(':').map(Number); return p[0] * 60 + (p[1] || 0); }
-function listaHoras_(t) { return String(t || '').split(',').map(x => x.trim()).filter(x => /^\d{1,2}:\d{2}$/.test(x)).map(x => x.length === 4 ? '0' + x : x).sort(); }
+// Acepta 08:00, 8:00, 8:00:00, 8:00 a. m., 5:00 p. m. (Sheets a veces convierte lo que se escribe a mano)
+function listaHoras_(t) {
+  return String(t || '').split(/[,;]/).map(x => x.trim().toLowerCase()).map(x => {
+    const m = x.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap])?/);
+    if (!m) return '';
+    let h = Number(m[1]);
+    if (m[3] === 'p' && h < 12) h += 12;
+    if (m[3] === 'a' && h === 12) h = 0;
+    return (h < 10 ? '0' : '') + h + ':' + m[2];
+  }).filter(Boolean).sort();
+}
+// Acepta 2026-12-25, 25/12/2026 o 25-12-2026
+function listaFechas_(t) {
+  return String(t || '').split(/[,;\s]+/).map(x => x.trim()).map(x => {
+    let m = x.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (m) return m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+    m = x.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+    if (m) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+    return '';
+  }).filter(Boolean);
+}
 
 // Lo ejecuta el activador cada 5 minutos
 function revisarRecordatorios() {
   if (!props_().getProperty('FCM_CUENTA_SERVICIO')) return;
   const ahora = new Date(), hoy = hoy_();
   const dia = Number(Utilities.formatDate(ahora, tz_(), 'u'));               // 1 = lunes ... 7 = domingo
-  const dias = (cfg_('DIAS_LABORALES') || '1,2,3,4,5').split(',').map(x => Number(x.trim()));
+  const dias = (cfg_('DIAS_LABORALES') || '1,2,3,4,5').split(/[,;\s]+/).map(x => Number(x.trim()));
   if (dias.indexOf(dia) < 0) return;
-  if ((cfg_('FERIADOS') || '').split(',').map(x => x.trim()).indexOf(hoy) >= 0) return;
+  if (listaFechas_(cfg_('FERIADOS')).indexOf(hoy) >= 0) return;
   const hm = minutos_(Utilities.formatDate(ahora, tz_(), 'HH:mm'));
   const avisos = listaHoras_(cfg_('AVISOS_ENTRADA') || '08:00,08:15,08:30').map((t, i) => ({ t: t, tipo: 'entrada', n: i }))
     .concat(listaHoras_(cfg_('AVISOS_SALIDA') || '17:00').map((t, i) => ({ t: t, tipo: 'salida', n: i })));
