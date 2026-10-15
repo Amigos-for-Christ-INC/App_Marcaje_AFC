@@ -9,7 +9,7 @@
  * Hojas: Empleados, Lugares, Marcas, Permisos, Config (se crean solas).
  */
 
-const H = { EMP: 'Empleados', LUG: 'Lugares', MAR: 'Marcas', PER: 'Permisos', CFG: 'Config' };
+const H = { EMP: 'Empleados', LUG: 'Lugares', MAR: 'Marcas', PER: 'Permisos', CFG: 'Config', DIS: 'Dispositivos' };
 const EMP_COLS = ['Correo', 'Nombre', 'Cargo', 'Lugar', 'Activo', 'Hash', 'Sal', 'DebeCambiar', 'Rol'];
 const MAR_COLS = ['ID', 'Fecha', 'Correo', 'Nombre', 'Entrada', 'Salida', 'Horas', 'LatEntrada', 'LngEntrada', 'MetrosEntrada', 'LatSalida', 'LngSalida', 'MetrosSalida', 'Lugar', 'Observacion', 'IdsCliente'];
 const PER_COLS = ['ID', 'Solicitado', 'Correo', 'Nombre', 'Tipo', 'Desde', 'Hasta', 'HoraDesde', 'HoraHasta', 'Motivo', 'Estado', 'Respuesta', 'Revisado', 'RevisadoPor'];
@@ -38,7 +38,8 @@ function apiPublica_() {
     marcar, sincronizarMarcas, misMarcas, solicitarPermiso, misPermisos,
     adminLogin, adminResumen, responderPermiso, guardarEmpleado, guardarLugar, cambiarPinAdmin,
     reporte, reporteADrive, estadoRespaldo, respaldarAhora, activarRespaldoMensual,
-    guardarAvisos, probarAviso
+    guardarAvisos, probarAviso,
+    registrarDispositivo, quitarDispositivo, probarNotificacion, estadoRecordatorios, activarRecordatorios
   };
 }
 
@@ -66,9 +67,9 @@ function olvidarMemoria_() { _cfg = null; _emps = null; _lugs = null; }
 // Revisa/crea las hojas solo una vez cada 6 horas (no en cada petición)
 function setupUnaVez_() {
   const c = cache_();
-  if (c.get('SETUP_V3')) return;
+  if (c.get('SETUP_V4')) return;
   setup_();
-  c.put('SETUP_V3', '1', 21600);
+  c.put('SETUP_V4', '1', 21600);
 }
 
 function ss_() {
@@ -95,6 +96,7 @@ function setup_() {
   ensure_(ss, H.LUG, ['Nombre', 'Lat', 'Lng', 'RadioMetros']);
   ensure_(ss, H.MAR, MAR_COLS);
   ensure_(ss, H.PER, PER_COLS);
+  ensure_(ss, H.DIS, ['Correo', 'Token', 'Plataforma', 'Actualizado']);
   migrar_(H.EMP, EMP_COLS);
   migrar_(H.PER, PER_COLS);
   migrar_(H.MAR, MAR_COLS);
@@ -102,6 +104,11 @@ function setup_() {
   if (cfg.getLastRow() < 2) {
     writeText_(cfg, 2, [['PIN_ADMIN', '1234'], ['EMPRESA', 'Mi Empresa'], ['PRECISION_MAX_METROS', '100']]);
   }
+  // Horario de los recordatorios (se pueden cambiar en la hoja Config)
+  const claves = cfg.getRange(1, 1, Math.max(cfg.getLastRow(), 1), 1).getDisplayValues().map(r => r[0]);
+  [['DIAS_LABORALES', '1,2,3,4,5'], ['AVISOS_ENTRADA', '08:00,08:15,08:30'], ['AVISOS_SALIDA', '17:00'], ['FERIADOS', '']]
+    .forEach(([k, v]) => { if (claves.indexOf(k) < 0) writeText_(cfg, cfg.getLastRow() + 1, [[k, v]]); });
+  _cfg = null;
 }
 
 function ensure_(ss, name, headers) {
@@ -871,7 +878,191 @@ function obtenerEmpresa() { return cfg_('EMPRESA'); }
 function autorizar() {
   setup_();
   activarRespaldo_();
+  activarRecordatorios_();
+  Logger.log('Recordatorios activos: ' + recordatoriosActivos_() + ' | Firebase configurado: ' + !!props_().getProperty('FCM_CUENTA_SERVICIO'));
   Logger.log('Respaldo mensual activo: ' + respaldoActivo_());
   Logger.log('Hoja de datos: ' + ss_().getUrl());
   Logger.log('Correos restantes hoy: ' + MailApp.getRemainingDailyQuota());
+}
+
+/* ================= Recordatorios por notificación (Firebase Cloud Messaging) =================
+ * Configuración (una sola vez):
+ *  - Propiedad del script FCM_CUENTA_SERVICIO: el JSON completo de la cuenta de servicio de Firebase.
+ *  - Hoja Config: DIAS_LABORALES (1 = lunes ... 7 = domingo), AVISOS_ENTRADA, AVISOS_SALIDA (horas HH:mm),
+ *    FERIADOS (fechas yyyy-MM-dd separadas por coma).
+ * El activador revisarRecordatorios corre cada 5 minutos y envía cada aviso una sola vez al día:
+ *  - Avisos de entrada: solo a quien no ha marcado entrada ni tiene un permiso aprobado hoy.
+ *  - Aviso de salida: solo a quien marcó entrada y todavía no marca salida.
+ */
+function registrarDispositivo(token, pushToken, plataforma) {
+  const e = sesionEmp_(token);
+  pushToken = String(pushToken || '').trim();
+  if (pushToken.length < 20 || pushToken.length > 4096) throw new Error('Identificador de notificaciones no válido.');
+  return lock_(() => {
+    const sh = sh_(H.DIS);
+    const v = sh.getDataRange().getDisplayValues();
+    const fila = [[e.correo, pushToken, String(plataforma || '').slice(0, 40), ahora_()]];
+    for (let i = 1; i < v.length; i++) if (v[i][1] === pushToken) { writeText_(sh, i + 1, fila); return 'Recordatorios activados.'; }
+    writeText_(sh, sh.getLastRow() + 1, fila);
+    return 'Recordatorios activados.';
+  });
+}
+
+function quitarDispositivo(token, pushToken) {
+  sesionEmp_(token);
+  borrarDispositivos_([String(pushToken || '')]);
+  return 'Recordatorios desactivados en este teléfono.';
+}
+
+function dispositivos_() {
+  const mapa = {};
+  rows_(H.DIS).forEach(r => { const c = correo_(r[0]); if (c && r[1]) (mapa[c] = mapa[c] || []).push(r[1]); });
+  return mapa;
+}
+
+function borrarDispositivos_(tokens) {
+  if (!tokens.length) return;
+  lock_(() => {
+    const sh = sh_(H.DIS), last = sh.getLastRow();
+    if (last < 2) return;
+    const v = sh.getRange(2, 1, last - 1, 4).getDisplayValues();
+    const quedan = v.filter(r => tokens.indexOf(r[1]) < 0);
+    if (quedan.length === v.length) return;
+    sh.getRange(2, 1, last - 1, 4).clearContent();
+    if (quedan.length) writeText_(sh, 2, quedan);
+  });
+}
+
+// Token de acceso a Firebase firmado con la cuenta de servicio (se guarda 50 minutos)
+function tokenFcm_() {
+  const c = cache_(), guardado = c.get('FCM_ACCESO');
+  if (guardado) return guardado;
+  let sa;
+  try { sa = JSON.parse(props_().getProperty('FCM_CUENTA_SERVICIO') || '{}'); } catch (e) { sa = {}; }
+  if (!sa.private_key || !sa.client_email || !sa.project_id) throw new Error('Falta configurar FCM_CUENTA_SERVICIO en las propiedades del script.');
+  const b64 = t => Utilities.base64EncodeWebSafe(t, Utilities.Charset.UTF_8).replace(/=+$/, '');
+  const ahora = Math.floor(Date.now() / 1000);
+  const cab = b64(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const datos = b64(JSON.stringify({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/firebase.messaging',
+    aud: 'https://oauth2.googleapis.com/token', iat: ahora, exp: ahora + 3600 }));
+  const firma = Utilities.base64EncodeWebSafe(Utilities.computeRsaSha256Signature(cab + '.' + datos, sa.private_key)).replace(/=+$/, '');
+  const r = UrlFetchApp.fetch('https://oauth2.googleapis.com/token', { method: 'post', muteHttpExceptions: true,
+    payload: { grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: cab + '.' + datos + '.' + firma } });
+  const j = JSON.parse(r.getContentText() || '{}');
+  if (!j.access_token) throw new Error('Firebase rechazó la cuenta de servicio: ' + (j.error_description || j.error || r.getResponseCode()));
+  c.put('FCM_ACCESO', j.access_token, 3000);
+  c.put('FCM_PROYECTO', sa.project_id, 3000);
+  return j.access_token;
+}
+
+// Envía notificaciones: lista de { token, titulo, cuerpo, tipo }. Borra los teléfonos que ya no existen.
+function enviarPush_(lista) {
+  if (!lista.length) return { enviadas: 0, fallidas: 0 };
+  const acceso = tokenFcm_(), proyecto = cache_().get('FCM_PROYECTO');
+  let base = cfg_('URL_APP');
+  if (base && base.slice(-1) !== '/') base += '/';
+  const invalidos = []; let enviadas = 0, fallidas = 0;
+  for (let i = 0; i < lista.length; i += 100) {
+    const lote = lista.slice(i, i + 100);
+    const pedidos = lote.map(m => {
+      const webpush = { notification: { tag: 'marcaje-' + m.tipo, renotify: true } };
+      if (base) { webpush.fcm_options = { link: base }; webpush.notification.icon = base + 'icons/icon-192.png'; }
+      return {
+        url: 'https://fcm.googleapis.com/v1/projects/' + proyecto + '/messages:send', method: 'post',
+        contentType: 'application/json', muteHttpExceptions: true, headers: { Authorization: 'Bearer ' + acceso },
+        payload: JSON.stringify({ message: { token: m.token, notification: { title: m.titulo, body: m.cuerpo }, webpush: webpush, data: { tipo: m.tipo } } })
+      };
+    });
+    UrlFetchApp.fetchAll(pedidos).forEach((r, k) => {
+      const code = r.getResponseCode();
+      if (code === 200) { enviadas++; return; }
+      fallidas++;
+      const t = r.getContentText();
+      if (code === 404 || /UNREGISTERED|registration-token-not-registered|INVALID_ARGUMENT/.test(t)) invalidos.push(lote[k].token);
+    });
+  }
+  borrarDispositivos_(invalidos);
+  return { enviadas: enviadas, fallidas: fallidas };
+}
+
+function minutos_(hhmm) { const p = String(hhmm).split(':').map(Number); return p[0] * 60 + (p[1] || 0); }
+function listaHoras_(t) { return String(t || '').split(',').map(x => x.trim()).filter(x => /^\d{1,2}:\d{2}$/.test(x)).map(x => x.length === 4 ? '0' + x : x).sort(); }
+
+// Lo ejecuta el activador cada 5 minutos
+function revisarRecordatorios() {
+  if (!props_().getProperty('FCM_CUENTA_SERVICIO')) return;
+  const ahora = new Date(), hoy = hoy_();
+  const dia = Number(Utilities.formatDate(ahora, tz_(), 'u'));               // 1 = lunes ... 7 = domingo
+  const dias = (cfg_('DIAS_LABORALES') || '1,2,3,4,5').split(',').map(x => Number(x.trim()));
+  if (dias.indexOf(dia) < 0) return;
+  if ((cfg_('FERIADOS') || '').split(',').map(x => x.trim()).indexOf(hoy) >= 0) return;
+  const hm = minutos_(Utilities.formatDate(ahora, tz_(), 'HH:mm'));
+  const avisos = listaHoras_(cfg_('AVISOS_ENTRADA') || '08:00,08:15,08:30').map((t, i) => ({ t: t, tipo: 'entrada', n: i }))
+    .concat(listaHoras_(cfg_('AVISOS_SALIDA') || '17:00').map((t, i) => ({ t: t, tipo: 'salida', n: i })));
+  const p = props_();
+  avisos.forEach(a => {
+    const k = 'AVISO_' + hoy + '_' + a.tipo + '_' + a.t, dif = hm - minutos_(a.t);
+    if (dif < 0 || dif > 25 || p.getProperty(k)) return;   // a su hora (hasta 25 min de margen) y una sola vez
+    p.setProperty(k, ahora_());
+    try { enviarAviso_(a, hoy); } catch (e) { console.error('Recordatorio ' + k + ': ' + e); }
+  });
+  // Limpia las marcas de avisos de días anteriores
+  const todas = p.getProperties();
+  Object.keys(todas).forEach(k => { if (k.indexOf('AVISO_') === 0 && k.indexOf('AVISO_' + hoy) !== 0) p.deleteProperty(k); });
+}
+
+function enviarAviso_(a, hoy) {
+  const dev = dispositivos_();
+  const marcas = {};
+  marcasDeHoy_().forEach(r => { marcas[correo_(r[2])] = r; });
+  const permiso = {};
+  rows_(H.PER).forEach(r => { if (r[10] === 'Aprobado' && r[5] <= hoy && r[6] >= hoy) permiso[correo_(r[2])] = true; });
+  const lista = [];
+  empleados_().filter(e => e.activo === 'SI' && dev[e.correo]).forEach(e => {
+    const m = marcas[e.correo], nombre = String(e.nombre || '').trim().split(' ')[0] || '';
+    let titulo, cuerpo;
+    if (a.tipo === 'entrada') {
+      if (m || permiso[e.correo]) return;
+      if (a.n === 0) { titulo = 'Recuerda marcar tu entrada'; cuerpo = 'Buenos días, ' + nombre + '. Marca tu entrada al llegar.'; }
+      else if (a.n === 1) { titulo = 'Ya pasó la tolerancia de entrada'; cuerpo = nombre + ', todavía no has marcado tu entrada. Márcala ahora.'; }
+      else { titulo = 'Todavía no has marcado tu entrada'; cuerpo = nombre + ', marca tu entrada apenas llegues. Si hoy no vienes, pide un permiso en la app.'; }
+    } else {
+      if (!m || !m[4] || m[5]) return;
+      titulo = 'No olvides marcar tu salida'; cuerpo = 'Terminó la jornada, ' + nombre + '. Cuando salgas, marca tu salida.';
+    }
+    dev[e.correo].forEach(t => lista.push({ token: t, titulo: titulo, cuerpo: cuerpo, tipo: a.tipo }));
+  });
+  const r = enviarPush_(lista);
+  console.log('Aviso ' + a.tipo + ' ' + a.t + ': ' + r.enviadas + ' enviadas, ' + r.fallidas + ' fallidas');
+  return r;
+}
+
+function probarNotificacion(token) {
+  const e = sesionEmp_(token);
+  const t = dispositivos_()[e.correo] || [];
+  if (!t.length) throw new Error('Este usuario no tiene recordatorios activados en ningún teléfono.');
+  const r = enviarPush_(t.map(x => ({ token: x, titulo: 'Recordatorios activados', cuerpo: 'Así te llegará el aviso si se te olvida marcar.', tipo: 'prueba' })));
+  if (!r.enviadas) throw new Error('No se pudo enviar la prueba. Vuelve a activar los recordatorios.');
+  return 'Notificación de prueba enviada.';
+}
+
+function recordatoriosActivos_() {
+  return ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'revisarRecordatorios');
+}
+function activarRecordatorios_() {
+  if (!recordatoriosActivos_()) ScriptApp.newTrigger('revisarRecordatorios').timeBased().everyMinutes(5).create();
+}
+
+function estadoRecordatorios(tok) {
+  actor_(tok, ['Admin']);
+  const dev = dispositivos_();
+  return { firebase: !!props_().getProperty('FCM_CUENTA_SERVICIO'), activo: recordatoriosActivos_(),
+    personas: Object.keys(dev).length, telefonos: Object.keys(dev).reduce((s, k) => s + dev[k].length, 0),
+    dias: cfg_('DIAS_LABORALES') || '1,2,3,4,5', entrada: cfg_('AVISOS_ENTRADA') || '08:00,08:15,08:30', salida: cfg_('AVISOS_SALIDA') || '17:00' };
+}
+
+function activarRecordatorios(tok) {
+  actor_(tok, ['Admin']);
+  activarRecordatorios_();
+  return 'Recordatorios automáticos activados (se revisan cada 5 minutos).';
 }
