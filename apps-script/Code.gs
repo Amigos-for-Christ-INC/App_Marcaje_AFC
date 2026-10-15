@@ -34,7 +34,7 @@ function doGet() {
  */
 function apiPublica_() {
   return {
-    obtenerEmpresa, login, sesion, cerrarSesion, pedirCodigo, restablecerClave, cambiarClave,
+    obtenerEmpresa, login, loginMicrosoft, sesion, cerrarSesion, pedirCodigo, restablecerClave, cambiarClave,
     marcar, sincronizarMarcas, misMarcas, solicitarPermiso, misPermisos,
     adminLogin, adminResumen, responderPermiso, guardarEmpleado, guardarLugar, cambiarPinAdmin,
     reporte, reporteADrive, estadoRespaldo, respaldarAhora, activarRespaldoMensual,
@@ -67,9 +67,9 @@ function olvidarMemoria_() { _cfg = null; _emps = null; _lugs = null; }
 // Revisa/crea las hojas solo una vez cada 6 horas (no en cada petición)
 function setupUnaVez_() {
   const c = cache_();
-  if (c.get('SETUP_V4')) return;
+  if (c.get('SETUP_V5')) return;
   setup_();
-  c.put('SETUP_V4', '1', 21600);
+  c.put('SETUP_V5', '1', 21600);
 }
 
 function ss_() {
@@ -106,7 +106,7 @@ function setup_() {
   }
   // Horario de los recordatorios (se pueden cambiar en la hoja Config)
   const claves = cfg.getRange(1, 1, Math.max(cfg.getLastRow(), 1), 1).getDisplayValues().map(r => r[0]);
-  [['DIAS_LABORALES', '1,2,3,4,5'], ['AVISOS_ENTRADA', '08:00,08:15,08:30'], ['AVISOS_SALIDA', '17:00'], ['FERIADOS', '']]
+  [['DIAS_LABORALES', '1,2,3,4,5'], ['AVISOS_ENTRADA', '08:00,08:15,08:30'], ['AVISOS_SALIDA', '17:00'], ['FERIADOS', ''], ['DOMINIO_MICROSOFT', 'amigosforchrist.org']]
     .forEach(([k, v]) => { if (claves.indexOf(k) < 0) writeText_(cfg, cfg.getLastRow() + 1, [[k, v]]); });
   _cfg = null;
 }
@@ -244,9 +244,9 @@ function validarUbicacion_(e, lat, lng, prec) {
 const DIAS_SESION = 30;
 function props_() { return PropertiesService.getScriptProperties(); }
 
-function crearSesionEmp_(correo) {
+function crearSesionEmp_(correo, viaMicrosoft) {
   const t = Utilities.getUuid().replace(/-/g, '') + id_();
-  props_().setProperty('S_' + t, correo + '|' + (Date.now() + DIAS_SESION * 86400000));
+  props_().setProperty('S_' + t, correo + '|' + (Date.now() + DIAS_SESION * 86400000) + (viaMicrosoft ? '|ms' : ''));
   return t;
 }
 function limpiarSesiones_() {
@@ -260,7 +260,8 @@ function sesionEmp_(token) {
   if (!v || Number(v.split('|')[1]) < Date.now()) throw new Error('SESION: Tu sesión venció. Vuelve a entrar.');
   const e = empPorCorreo_(v.split('|')[0]);
   if (!e || e.activo === 'NO') throw new Error('SESION: Tu usuario está inactivo. Habla con administración.');
-  return e;
+  // Quien entró con Microsoft no usa la contraseña de la app: no se le pide cambiar la temporal
+  return v.split('|')[2] === 'ms' ? Object.assign({}, e, { debeCambiar: false }) : e;
 }
 function crearSesionAdmin_() {
   const t = Utilities.getUuid() + id_();
@@ -311,6 +312,27 @@ function login(correo, clave) {
   cache_().remove(k);
   limpiarSesiones_();
   return datosInicio_(e, crearSesionEmp_(e.correo));
+}
+
+// Entrar con la cuenta de Microsoft 365: el teléfono manda el permiso que Microsoft le dio,
+// y el servidor le pregunta a Microsoft quién es esa persona (no se puede falsificar).
+function loginMicrosoft(accessToken) {
+  if (!accessToken || String(accessToken).length < 50) throw new Error('No se recibió la autorización de Microsoft.');
+  const r = UrlFetchApp.fetch('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,displayName',
+    { headers: { Authorization: 'Bearer ' + accessToken }, muteHttpExceptions: true });
+  if (r.getResponseCode() !== 200) throw new Error('Microsoft no confirmó tu identidad. Intenta entrar de nuevo.');
+  const me = JSON.parse(r.getContentText() || '{}');
+  const opciones = [me.mail, me.userPrincipalName].map(correo_).filter(Boolean);
+  if (!opciones.length) throw new Error('Tu cuenta de Microsoft no tiene un correo asignado.');
+  const dominio = (cfg_('DOMINIO_MICROSOFT') || '').toLowerCase().replace(/^@/, '');
+  if (dominio && !opciones.some(c => c.split('@')[1] === dominio)) throw new Error('Entra con tu cuenta de @' + dominio + '.');
+  const e = opciones.map(empPorCorreo_).find(Boolean);
+  if (!e) throw new Error('Tu cuenta ' + opciones[0] + ' no está registrada en la app. Pide a administración que te agregue.');
+  if (e.activo === 'NO') throw new Error('Tu usuario está inactivo. Habla con administración.');
+  limpiarSesiones_();
+  const datos = datosInicio_(Object.assign({}, e, { debeCambiar: false }), crearSesionEmp_(e.correo, true));
+  datos.viaMicrosoft = true;
+  return datos;
 }
 
 function sesion(token) {
