@@ -9,7 +9,7 @@ if (self.FIREBASE_CONFIG && self.FIREBASE_CONFIG.apiKey) {
 }
 
 // Al cambiar archivos de la app, sube el número de VERSION para que los teléfonos se actualicen.
-const VERSION = 'asistencia-v4';
+const VERSION = 'asistencia-v5';
 const BASE = ['./', './index.html', './config.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png'];
 
@@ -49,7 +49,7 @@ self.addEventListener('fetch', e => {
   }
 
   // Tipografía Raleway de Google Fonts: copia guardada y se actualiza en segundo plano
-  if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
+  if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com' || url.hostname === 'alcdn.msauth.net') {
     e.respondWith(caches.open(VERSION).then(c => c.match(req).then(guardada => {
       const red = fetch(req).then(r => { c.put(req, r.clone()); return r; }).catch(() => guardada);
       return guardada || red;
