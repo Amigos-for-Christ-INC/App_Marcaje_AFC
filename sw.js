@@ -1,6 +1,6 @@
 // Service worker: guarda la app en el teléfono para que abra sin internet.
 // Al cambiar archivos de la app, sube el número de VERSION para que los teléfonos se actualicen.
-const VERSION = 'asistencia-v1';
+const VERSION = 'asistencia-v2';
 const BASE = ['./', './index.html', './config.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png'];
 
