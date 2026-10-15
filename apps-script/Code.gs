@@ -21,7 +21,7 @@ const LIBRE = 'LIBRE';             // Lugar = "Libre": puede marcar desde cualqu
 
 /* ================= Web app ================= */
 function doGet() {
-  setup_();
+  setupUnaVez_();
   return HtmlService.createHtmlOutputFromFile('Index')
     .setTitle('Control de asistencia | Amigos for Christ')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1, maximum-scale=1')
@@ -50,7 +50,7 @@ function doPost(e) {
     const api = apiPublica_();
     if (!Object.prototype.hasOwnProperty.call(api, fn)) throw new Error('Función no permitida.');
     const args = Array.isArray(req.args) ? req.args.slice(0, 10) : [];
-    setup_();
+    setupUnaVez_();
     res = { ok: true, data: api[fn].apply(null, args) };
   } catch (err) {
     res = { ok: false, error: (err && err.message) || String(err) };
@@ -59,15 +59,28 @@ function doPost(e) {
 }
 
 /* ================= Utilidades ================= */
+/* Rendimiento: lo que se lee una vez se reutiliza durante la misma petición */
+let _ss = null, _hojas = {}, _cfg = null, _emps = null, _lugs = null;
+function olvidarMemoria_() { _cfg = null; _emps = null; _lugs = null; }
+
+// Revisa/crea las hojas solo una vez cada 6 horas (no en cada petición)
+function setupUnaVez_() {
+  const c = cache_();
+  if (c.get('SETUP_V3')) return;
+  setup_();
+  c.put('SETUP_V3', '1', 21600);
+}
+
 function ss_() {
+  if (_ss) return _ss;
   const p = PropertiesService.getScriptProperties();
   const id = p.getProperty('SS_ID');
-  if (id) return SpreadsheetApp.openById(id);
+  if (id) return (_ss = SpreadsheetApp.openById(id));
   const ss = SpreadsheetApp.create('Marcaje - Base de datos');
   p.setProperty('SS_ID', ss.getId());
-  return ss;
+  return (_ss = ss);
 }
-function sh_(n) { return ss_().getSheetByName(n); }
+function sh_(n) { return _hojas[n] || (_hojas[n] = ss_().getSheetByName(n)); }
 function cache_() { return CacheService.getScriptCache(); }
 function tz_() { return Session.getScriptTimeZone(); }
 function hoy_() { return Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd'); }
@@ -123,14 +136,15 @@ function rows_(name) {
 }
 
 function cfg_(k) {
-  const r = rows_(H.CFG).find(x => x[0] === k);
-  return r ? String(r[1]).trim() : '';
+  if (!_cfg) { _cfg = {}; rows_(H.CFG).forEach(r => { if (r[0]) _cfg[r[0]] = String(r[1]).trim(); }); }
+  return _cfg[k] || '';
 }
 
 function lock_(fn) {
   const l = LockService.getScriptLock();
   if (!l.tryLock(30000)) throw new Error('Hay mucha gente marcando en este momento. Intenta de nuevo en unos segundos.');
-  try { return fn(); } finally { l.releaseLock(); }
+  olvidarMemoria_();   // dentro del candado se trabaja con datos frescos
+  try { return fn(); } finally { l.releaseLock(); olvidarMemoria_(); }
 }
 
 function difHoras_(a, b) {
@@ -164,7 +178,8 @@ function fallo_(k) { const c = cache_(); c.put(k, String(Number(c.get(k) || 0) +
 
 /* ================= Empleados y lugares ================= */
 function empleados_() {
-  return rows_(H.EMP).map((r, i) => ({
+  if (_emps) return _emps;
+  return _emps = rows_(H.EMP).map((r, i) => ({
     row: i + 2, correo: correo_(r[0]), nombre: r[1], cargo: r[2], lugar: r[3],
     activo: String(r[4]).trim().toUpperCase() === 'NO' ? 'NO' : 'SI', hash: r[5], sal: r[6],
     debeCambiar: String(r[7]).trim().toUpperCase() === 'SI', rol: normRol_(r[8])
@@ -181,7 +196,8 @@ function empPorCorreo_(correo) {
 function publico_(e) { return { correo: e.correo, nombre: e.nombre, cargo: e.cargo, lugar: e.lugar, debeCambiar: e.debeCambiar, rol: e.rol }; }
 
 function lugares_() {
-  return rows_(H.LUG).filter(r => r[0]).map(r => ({
+  if (_lugs) return _lugs;
+  return _lugs = rows_(H.LUG).filter(r => r[0]).map(r => ({
     nombre: String(r[0]).trim(), lat: Number(String(r[1]).replace(',', '.')),
     lng: Number(String(r[2]).replace(',', '.')), radio: Number(r[3]) || 150
   }));
@@ -353,15 +369,34 @@ function filaHoy_(correo) { return filaDe_(correo, hoy_()); }
 
 // Busca la marca de un empleado en una fecha (revisa las últimas 2000 filas;
 // las marcas sin conexión pueden llegar fuera de orden)
+// Para ir rápido recuerda en caché qué fila tiene la marca de cada persona en el día,
+// y si no la tiene en caché revisa solo las columnas Fecha y Correo.
 function filaDe_(correo, fecha) {
-  const sh = sh_(H.MAR), last = sh.getLastRow();
+  const sh = sh_(H.MAR), c = cache_(), k = claveFila_(correo, fecha);
+  const guardada = Number(c.get(k)) || 0;
+  if (guardada >= 2) {
+    const d = sh.getRange(guardada, 1, 1, MAR_COLS.length).getDisplayValues()[0];
+    if (d[1] === fecha && correo_(d[2]) === correo) return { row: guardada, data: d };
+  }
+  const last = sh.getLastRow();
   if (last < 2) return null;
   const n = Math.min(last - 1, 2000), start = last - n + 1;
-  const v = sh.getRange(start, 1, n, MAR_COLS.length).getDisplayValues();
+  const v = sh.getRange(start, 2, n, 2).getDisplayValues();
   for (let i = v.length - 1; i >= 0; i--) {
-    if (v[i][1] === fecha && correo_(v[i][2]) === correo) return { row: start + i, data: v[i] };
+    if (v[i][0] === fecha && correo_(v[i][1]) === correo) {
+      const row = start + i;
+      c.put(k, String(row), 21600);
+      return { row: row, data: sh.getRange(row, 1, 1, MAR_COLS.length).getDisplayValues()[0] };
+    }
   }
   return null;
+}
+function claveFila_(correo, fecha) { return 'R_' + fecha + '|' + correo; }
+function recordarFila_(correo, fecha, row) { cache_().put(claveFila_(correo, fecha), String(row), 21600); }
+function estadoDeFila_(f) {
+  if (!f) return { fase: 'entrada' };
+  if (!f.data[5]) return { fase: 'salida', entrada: f.data[4] };
+  return { fase: 'listo', entrada: f.data[4], salida: f.data[5], horas: f.data[6] };
 }
 
 function marcasDeHoy_() {
@@ -372,12 +407,7 @@ function marcasDeHoy_() {
   return sh.getRange(start, 1, n, MAR_COLS.length).getDisplayValues().filter(r => r[1] === h);
 }
 
-function estado_(correo) {
-  const f = filaHoy_(correo);
-  if (!f) return { fase: 'entrada' };
-  if (!f.data[5]) return { fase: 'salida', entrada: f.data[4] };
-  return { fase: 'listo', entrada: f.data[4], salida: f.data[5], horas: f.data[6] };
-}
+function estado_(correo) { return estadoDeFila_(filaHoy_(correo)); }
 
 function marcar(token, lat, lng, prec) {
   const e = sesionEmp_(token);
@@ -385,21 +415,24 @@ function marcar(token, lat, lng, prec) {
   const u = validarUbicacion_(e, lat, lng, prec);   // fuera del candado: no frena a los demás
   return lock_(() => {
     const sh = sh_(H.MAR);
-    const st = estado_(e.correo);
+    const hoy = hoy_(), f = filaDe_(e.correo, hoy), st = estadoDeFila_(f);
     const h = hora_();
-    let msg;
+    let msg, nuevo;
     if (st.fase === 'entrada') {
-      writeText_(sh, sh.getLastRow() + 1, [[id_(), hoy_(), e.correo, e.nombre, h, '', '', u.lat, u.lng, u.d, '', '', '', u.nombre]]);
+      const row = sh.getLastRow() + 1;
+      writeText_(sh, row, [[id_(), hoy, e.correo, e.nombre, h, '', '', u.lat, u.lng, u.d, '', '', '', u.nombre]]);
+      recordarFila_(e.correo, hoy, row);
       msg = 'Entrada marcada a las ' + h.slice(0, 5);
+      nuevo = { fase: 'salida', entrada: h };
     } else if (st.fase === 'salida') {
-      const f = filaHoy_(e.correo);
-      writeText_(sh, f.row, [[h, difHoras_(st.entrada, h).toFixed(2)]], 6);
-      writeText_(sh, f.row, [[u.lat, u.lng, u.d]], 11);
+      const horas = difHoras_(st.entrada, h).toFixed(2);
+      writeText_(sh, f.row, [[h, horas, f.data[7], f.data[8], f.data[9], u.lat, u.lng, u.d]], 6);
       msg = 'Salida marcada a las ' + h.slice(0, 5);
+      nuevo = { fase: 'listo', entrada: st.entrada, salida: h, horas: horas };
     } else {
       throw new Error('Ya marcaste entrada y salida hoy.');
     }
-    return { msg: msg, estado: estado_(e.correo), ahoraMs: Date.now() };
+    return { msg: msg, estado: nuevo, ahoraMs: Date.now() };
   });
 }
 
@@ -431,16 +464,18 @@ function sincronizarMarcas(token, lista) {
       try { u = validarUbicacion_(e, m.lat, m.lng, m.prec); }
       catch (err) { u = { nombre: '', d: '', lat: m.lat || '', lng: m.lng || '' }; obs.push('ubicación: ' + err.message); }
       const fecha = fmt(t, 'yyyy-MM-dd'), hora = fmt(t, 'HH:mm:ss');
-      const nota = (m.tipo === 'salida' ? 'Salida' : 'Entrada') + ' sin conexión, subida ' + fmt(ahora, 'dd/MM HH:mm') + (obs.length ? ' (' + obs.join('; ') + ')' : '');
+      const forma = m.motivo === 'ocupado' ? ' guardada en el teléfono (servidor ocupado), subida ' : ' sin conexión, subida ';
+      const nota = (m.tipo === 'salida' ? 'Salida' : 'Entrada') + forma + fmt(ahora, 'dd/MM HH:mm') + (obs.length ? ' (' + obs.join('; ') + ')' : '');
       const f = filaDe_(e.correo, fecha);
       if (m.tipo === 'entrada') {
-        if (!f) writeText_(sh, sh.getLastRow() + 1, [[id_(), fecha, e.correo, e.nombre, hora, '', '', u.lat, u.lng, u.d, '', '', '', u.nombre, nota, id]]);
+        if (!f) { const row = sh.getLastRow() + 1; writeText_(sh, row, [[id_(), fecha, e.correo, e.nombre, hora, '', '', u.lat, u.lng, u.d, '', '', '', u.nombre, nota, id]]); recordarFila_(e.correo, fecha, row); }
       } else if (f && !f.data[5]) {
-        writeText_(sh, f.row, [[hora, difHoras_(f.data[4], hora).toFixed(2)]], 6);
-        writeText_(sh, f.row, [[u.lat, u.lng, u.d]], 11);
-        writeText_(sh, f.row, [[(f.data[14] ? f.data[14] + '. ' : '') + nota, ((f.data[15] || '') + ' ' + id).trim()]], 15);
+        writeText_(sh, f.row, [[hora, difHoras_(f.data[4], hora).toFixed(2), f.data[7], f.data[8], f.data[9], u.lat, u.lng, u.d, f.data[13],
+          (f.data[14] ? f.data[14] + '. ' : '') + nota, ((f.data[15] || '') + ' ' + id).trim()]], 6);
       } else if (!f) {
-        writeText_(sh, sh.getLastRow() + 1, [[id_(), fecha, e.correo, e.nombre, '', hora, '', '', '', '', u.lat, u.lng, u.d, u.nombre, nota + ' (salida sin entrada)', id]]);
+        const row = sh.getLastRow() + 1;
+        writeText_(sh, row, [[id_(), fecha, e.correo, e.nombre, '', hora, '', '', '', '', u.lat, u.lng, u.d, u.nombre, nota + ' (salida sin entrada)', id]]);
+        recordarFila_(e.correo, fecha, row);
       }
       ids[id] = true;
       ok.push(id);
@@ -461,10 +496,14 @@ function misMarcas(token) {
   const e = sesionEmp_(token);
   const sh = sh_(H.MAR), last = sh.getLastRow();
   if (last < 2) return [];
-  const n = Math.min(last - 1, 15000), start = last - n + 1;   // ~3 meses con 200 empleados
-  return sh.getRange(start, 1, n, MAR_COLS.length).getDisplayValues()
-    .filter(r => correo_(r[2]) === e.correo).slice(-45).reverse()
-    .map(r => ({ fecha: r[1], entrada: r[4], salida: r[5], horas: r[6], lugar: r[13] }));
+  const n = Math.min(last - 1, 12000), start = last - n + 1;   // ~2 meses con 200 empleados
+  const v = sh.getRange(start, 2, n, 6).getDisplayValues();     // Fecha..Horas
+  const lug = sh.getRange(start, 14, n, 1).getDisplayValues();  // Lugar
+  const out = [];
+  for (let i = v.length - 1; i >= 0 && out.length < 45; i--) {
+    if (correo_(v[i][1]) === e.correo) out.push({ fecha: v[i][0], entrada: v[i][3], salida: v[i][4], horas: v[i][5], lugar: lug[i][0] });
+  }
+  return out;
 }
 
 /* ================= Permisos ================= */
@@ -527,6 +566,7 @@ function avisarPermiso_(e, p) {
 function setCfg_(k, v) {
   const sh = sh_(H.CFG);
   const col = sh.getRange(1, 1, Math.max(sh.getLastRow(), 1), 1).getDisplayValues();
+  _cfg = null;
   for (let i = 1; i < col.length; i++) if (col[i][0] === k) { writeText_(sh, i + 1, [[v]], 2); return; }
   writeText_(sh, sh.getLastRow() + 1, [[k, v]]);
 }
@@ -709,7 +749,13 @@ function generarReporte_(a, tipo, desde, hasta, lugar) {
   const emps = {};
   empleados_().filter(e => enAlcance_(a, e.lugar) && enLugar_(e.lugar, lugar)).forEach(e => emps[e.correo] = e);
   const titulo = TIPOS_REPORTE[tipo] + ' del ' + desde + ' al ' + hasta + (lugar ? ' (' + lugar + ')' : '');
-  const marcas = () => rows_(H.MAR).filter(r => r[1] >= desde && r[1] <= hasta && emps[correo_(r[2])]);
+  // Lee solo hasta la columna que el reporte necesita (Observación = 15; el resumen solo hasta Horas = 7)
+  const marcas = () => {
+    const sh = sh_(H.MAR), last = sh.getLastRow();
+    if (last < 2) return [];
+    const cols = tipo === 'resumen' ? 7 : 15;
+    return sh.getRange(2, 1, last - 1, cols).getDisplayValues().filter(r => r[1] >= desde && r[1] <= hasta && emps[correo_(r[2])]);
+  };
 
   if (tipo === 'marcas') {
     return { titulo: titulo, encabezados: ['Fecha', 'Empleado', 'Correo', 'Entrada', 'Salida', 'Horas', 'Lugar', 'Metros entrada', 'Metros salida', 'Observación'],
