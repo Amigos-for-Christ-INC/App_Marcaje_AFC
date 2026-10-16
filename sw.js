@@ -9,7 +9,7 @@ if (self.FIREBASE_CONFIG && self.FIREBASE_CONFIG.apiKey) {
 }
 
 // Al cambiar archivos de la app, sube el número de VERSION para que los teléfonos se actualicen.
-const VERSION = 'asistencia-v6';
+const VERSION = 'asistencia-v7';
 const BASE = ['./', './index.html', './config.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png'];
 
@@ -35,7 +35,7 @@ self.addEventListener('fetch', e => {
   // Página y config: primero internet (para tener la última versión), si no hay, la copia guardada
   if (url.origin === location.origin && (req.mode === 'navigate' || url.pathname.endsWith('/config.js') || url.pathname.endsWith('/index.html'))) {
     e.respondWith(
-      conLimite(fetch(req), 5000)
+      conLimite(fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }), 5000)   // siempre pide la versión más nueva
         .then(r => { const copia = r.clone(); caches.open(VERSION).then(c => c.put(req, copia)); return r; })
         .catch(() => caches.match(req).then(r => r || caches.match('./index.html')))
     );
