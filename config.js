@@ -18,5 +18,5 @@ self.VAPID_KEY = 'BDPTUHtdnW-E6Tc6YWKVAR7cD8uQfVkfxW4agXt5jxBo3NMatnBDcUEBy3fILW
 
 // Microsoft Entra ID (Entrar con Microsoft). Se copian del registro de la app en entra.microsoft.com:
 // Id. de aplicación (cliente) e Id. de directorio (inquilino). No son contraseñas.
-self.MS_CLIENT_ID = '';
-self.MS_TENANT_ID = '';
+self.MS_CLIENT_ID = '4f9e40a5-a27d-4bca-90ef-571a2cfa1437';
+self.MS_TENANT_ID = '3df804dd-19d4-414d-aea4-d693b7b73b45';
