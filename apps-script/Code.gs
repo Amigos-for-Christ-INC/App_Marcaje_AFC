@@ -1,6 +1,6 @@
 /**
  * MARCAJE DE ENTRADA Y SALIDA — Google Apps Script  (v2)
- * Creada y de autoría del Ing. Moisés Mendoza
+ * Creada por el área de Desarrollo Tecnológico. Autoría: Amigos for Christ, Inc.
  *
  * - Ingreso con correo y contraseña (guardada cifrada, nunca en texto).
  * - Cada empleado crea, cambia o recupera su contraseña con un código por correo.
