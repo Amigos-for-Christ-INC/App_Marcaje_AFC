@@ -3,7 +3,7 @@
 Control de asistencia: marcaje de entrada y salida con GPS, permisos, roles, reportes,
 respaldo mensual y funcionamiento sin internet. Se instala en el celular como una app.
 
-Creada y de autoría del Ing. Moisés Mendoza.
+Creada por el área de Desarrollo Tecnológico. Autoría: Amigos for Christ, Inc.
 
 ## Estructura
 - Raíz (`index.html`, `sw.js`, `manifest.webmanifest`, `icons/`, `config.js`): la app que se instala en los celulares. Se publica con GitHub Pages.
