@@ -120,6 +120,23 @@ window.addEventListener('load', function(){
   #toast.err{background:var(--alerta)}
   #cargando{position:fixed;inset:0;background:rgba(245,237,236,.75);display:flex;align-items:center;justify-content:center;z-index:8;font:700 20px Raleway,sans-serif;color:var(--navy)}
   footer{text-align:center;color:var(--texto);font-size:12px;margin-top:30px;font-weight:300}
+  /* Tarjeta "Conoce Amigos for Christ" */
+  .conoce{background:var(--blanco);border-radius:10px;margin-top:14px;overflow:hidden;box-shadow:0 1px 3px rgba(10,34,64,.08)}
+  .conoce .cab{background:var(--navy);color:var(--blanco);padding:16px 18px}
+  .conoce .cab small{display:block;color:var(--realce);font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:12px}
+  .conoce .cab h2{color:var(--blanco);margin:4px 0 0;font-size:20px}
+  .conoce .cuerpo{padding:16px 18px}
+  .conoce p{margin:0 0 12px;font-size:15px}
+  .pilares{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 14px;padding:0;list-style:none}
+  .pilares li{background:var(--neutro);color:var(--navy);border-radius:20px;padding:5px 11px;font-size:13px;font-weight:600}
+  .video{position:relative;display:block;width:100%;aspect-ratio:16/9;border-radius:8px;overflow:hidden;background:var(--navy) center/cover no-repeat;border:0;padding:0;margin:0 0 12px;cursor:pointer}
+  .video:after{content:"";position:absolute;inset:0;background:linear-gradient(transparent 50%,rgba(10,34,64,.55))}
+  .video .play{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:64px;height:64px;border-radius:50%;background:var(--azul);display:flex;align-items:center;justify-content:center;z-index:1;box-shadow:0 2px 10px rgba(0,0,0,.3)}
+  .video .rotulo{position:absolute;left:12px;bottom:10px;color:var(--blanco);font-weight:600;font-size:14px;z-index:1}
+  .video iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+  .redes{display:flex;justify-content:center;gap:18px;margin-top:12px;font-size:14px}
+  .redes a{color:var(--azul);font-weight:600;text-decoration:none}
+  a.boton{display:block;text-align:center;text-decoration:none;font:600 16px Raleway,sans-serif;border-radius:8px;padding:12px 16px;border:1.5px solid var(--navy);color:var(--navy)}
   /* Botón Entrar con Microsoft */
   .btn-ms{display:flex;align-items:center;justify-content:center;gap:10px;background:var(--blanco);color:#5E5E5E;border:1.5px solid #8C8C8C;font-weight:600}
   .separador{display:flex;align-items:center;gap:10px;color:var(--suave);font-size:13px;margin:16px 0 4px}
@@ -162,7 +179,29 @@ window.addEventListener('load', function(){
         <button class="sec" onclick="abrirRecuperar()">Crear o recuperar contraseña</button>
       </div>
     </div>
-    <p style="text-align:center"><button class="link" onclick="ver('vAdminLogin')">Administración</button></p>
+    <!-- Presentación de la organización (información pública de amigosforchrist.org) -->
+    <section class="conoce" aria-label="Conoce Amigos for Christ">
+      <div class="cab">
+        <small>Transformando vida en Nicaragua</small>
+        <h2>Conoce Amigos for Christ</h2>
+      </div>
+      <div class="cuerpo">
+        <p>Desde 1999 servimos hombro a hombro con las comunidades rurales de Chinandega, para que Cristo sea más visible a través de proyectos que cambian vidas.</p>
+        <ul class="pilares">
+          <li>Liderazgo</li><li>Agua y saneamiento</li><li>Salud</li><li>Educación</li><li>Desarrollo económico</li>
+        </ul>
+        <button class="video" id="videoAfc" onclick="verVideoAfc()" aria-label="Ver video de Amigos for Christ" style="background-image:url('https://i.ytimg.com/vi/TLvD8gnAUg0/hqdefault.jpg')">
+          <span class="play"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="#fff"/></svg></span>
+          <span class="rotulo">Ver video</span>
+        </button>
+        <a class="boton" href="https://amigosforchrist.org/es/inicio/" target="_blank" rel="noopener">Visitar amigosforchrist.org</a>
+        <div class="redes">
+          <a href="https://www.youtube.com/@AmigosForChrist" target="_blank" rel="noopener">YouTube</a>
+          <a href="https://www.facebook.com/amigosforchrist/" target="_blank" rel="noopener">Facebook</a>
+          <a href="https://www.instagram.com/amigosforchrist/" target="_blank" rel="noopener">Instagram</a>
+        </div>
+      </div>
+    </section>
   </section>
 
   <!-- CREAR / RECUPERAR CONTRASEÑA -->
@@ -1201,6 +1240,7 @@ async function revisarRegresoMicrosoft(){
   $('lgCorreo').value = leer('mk_correo');
   pintarLoginMs();
   if (await revisarRegresoMicrosoft()) return;
+  revisarAccesoPin();
   const t = leer('mk_tok');
   if (t) google.script.run.withSuccessHandler(iniciar).withFailureHandler(function(e){
     const m = (e && e.message) || String(e);
@@ -1208,6 +1248,18 @@ async function revisarRegresoMicrosoft(){
     store('mk_tok'); store('mk_ses'); store('mk_est');
   }).sesion(t);
 })();
+/* Video de presentación: se carga solo al tocarlo (no gasta datos si no se ve) */
+function verVideoAfc(){
+  const v = $('videoAfc');
+  if (!navigator.onLine) return toast('Necesitas internet para ver el video.', true);
+  if (v.querySelector('iframe')) return;
+  v.innerHTML = '<iframe src="https://www.youtube-nocookie.com/embed/TLvD8gnAUg0?autoplay=1&rel=0&playsinline=1" title="Amigos for Christ" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen></iframe>';
+  v.style.cursor = 'default';
+}
+/* Acceso de emergencia con PIN: ya no se muestra en el inicio; se abre con la dirección terminada en #admin */
+function revisarAccesoPin(){ if (location.hash === '#admin' && !S.token) ver('vAdminLogin'); }
+window.addEventListener('hashchange', revisarAccesoPin);
+
 document.addEventListener('keydown', e => {
   if (e.key !== 'Enter' || e.target.tagName === 'TEXTAREA') return;
   if (!$('vLogin').classList.contains('oculto')) entrar();
