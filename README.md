@@ -18,6 +18,12 @@ Creada por el área de Desarrollo Tecnológico. Autoría: Amigos for Christ, Inc
    La app queda en `https://amigos-for-christ-inc.github.io/App_Marcaje_AFC/`.
 4. En la hoja **Config** agrega `URL_APP` con ese enlace (para los correos de permisos).
 
+## Líderes y aprobación de permisos
+- En la hoja **Empleados**, columna **Lider**: el correo del líder de cada colaborador (o elígelo en el panel, pestaña Empleados).
+- Flujo: el colaborador pide permiso → lo aprueba primero su **líder** (pestaña *Equipo* en la app) → luego **Administración** da la aprobación final. Sin líder asignado, va directo a Administración.
+- El líder ve las horas trabajadas de la semana y del mes contra las esperadas (Config **HORAS_DIA**, 8 por defecto). Botón verde: cumple; rojo: le faltan horas.
+- Al aprobar, el líder puede fijar un día de fin de semana para **reponer** horas; ese día le llega el recordatorio de entrada.
+
 ## Instalar en el celular
 - **Android (Chrome):** abrir el enlace → menú ⋮ → **Instalar app** o **Agregar a pantalla principal**.
 - **iPhone (Safari):** abrir el enlace → Compartir → **Agregar a inicio**.

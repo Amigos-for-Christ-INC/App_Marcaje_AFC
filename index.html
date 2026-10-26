@@ -94,6 +94,21 @@ window.addEventListener('load', function(){
   .e-Con,.e-Pendiente{background:var(--navy);color:var(--realce)}
   .e-Sin{background:var(--blanco);color:var(--suave);border:1px solid var(--suave)}
   .e-Rechazado{background:var(--texto);color:var(--blanco)}
+  .e-Lider{background:var(--realce);color:var(--navy)}
+  /* Líderes: verde = cumple sus horas de la semana, rojo = le faltan horas */
+  :root{--verde:#1E7B45}
+  button.verde{background:var(--verde)!important;color:var(--blanco)!important}
+  button.rojo{background:var(--alerta)!important;color:var(--blanco)!important}
+  .horas{background:var(--neutro);border-radius:8px;padding:8px 10px;margin-top:8px;font-size:14px}
+  .horas .lin{display:flex;justify-content:space-between;gap:8px}
+  .horas .barra-h{height:6px;border-radius:3px;background:var(--gris-neutro);margin:3px 0 6px;overflow:hidden}
+  .horas .barra-h i{display:block;height:100%;background:var(--azul)}
+  .horas .ver{font-weight:700}
+  .cumple{color:var(--verde)} .falta{color:var(--alerta)}
+  .lista li.l-falta{border-left-color:var(--alerta)} .lista li.l-cumple{border-left-color:var(--verde)}
+  .rep{background:var(--navy);color:var(--realce);border-radius:6px;padding:4px 8px;font-size:13px;display:inline-block;margin-top:6px}
+  dialog.dlg label{margin-top:10px}
+  dialog.dlg .checks label{margin:10px 0 0}
   .acciones{display:flex;gap:8px}.acciones button{margin-top:10px;padding:10px}
   .ok{background:var(--azul)!important}.no{background:transparent!important;color:var(--navy)!important;border:1.5px solid var(--navy)!important}
   .total{display:flex;justify-content:space-between;align-items:center;background:var(--navy);color:var(--blanco);border-radius:8px;padding:12px 14px;margin-bottom:10px}
@@ -250,6 +265,7 @@ window.addEventListener('load', function(){
       <button class="on" data-tab="tMarcar" onclick="tab(this);revisarGps()">Marcar</button>
       <button data-tab="tHist" onclick="tab(this);cargarHist()">Historial</button>
       <button data-tab="tPerm" onclick="tab(this);cargarMisPermisos()">Permisos</button>
+      <button id="tabEquipo" class="oculto" data-tab="tEquipo" onclick="tab(this);cargarEquipo()">Equipo <span id="badgeEq"></span></button>
       <button data-tab="tCuenta" onclick="tab(this)">Cuenta</button>
       <button id="tabPanel" class="oculto" onclick="abrirPanel()">Panel</button>
     </div>
@@ -300,6 +316,18 @@ window.addEventListener('load', function(){
       <button onclick="enviarPermiso()">Enviar solicitud</button>
       <h2>Mis solicitudes</h2>
       <ul class="lista" id="listaMisPerm"></ul>
+    </div>
+
+    <div id="tEquipo" class="panel oculto">
+      <p class="sub" id="eqResumen" style="margin-top:12px"></p>
+      <h2>Permisos por aprobar</h2>
+      <ul class="lista" id="eqPend"></ul>
+      <h2>Mi equipo</h2>
+      <p class="sub" id="eqLeyenda" style="margin:-4px 0 10px"></p>
+      <ul class="lista" id="eqMiembros"></ul>
+      <h2>Decisiones recientes</h2>
+      <ul class="lista" id="eqRecientes"></ul>
+      <button class="sec" onclick="cargarEquipo()">Actualizar</button>
     </div>
 
     <div id="tCuenta" class="panel oculto">
@@ -357,7 +385,10 @@ window.addEventListener('load', function(){
 
     <div id="aPerm" class="panel oculto">
       <h2>Por revisar</h2>
+      <p class="sub" style="margin:-4px 0 10px">Ya aprobados por el líder (o sin líder asignado). Tu decisión es la final.</p>
       <ul class="lista" id="listaPend"></ul>
+      <h2>Esperando al líder <span class="sub" id="totalEspLider"></span></h2>
+      <ul class="lista" id="listaEspLider"></ul>
       <h2>Revisados recientemente</h2>
       <ul class="lista" id="listaRes"></ul>
     </div>
@@ -373,6 +404,8 @@ window.addEventListener('load', function(){
       <label for="eRol">Rol</label>
       <select id="eRol"></select>
       <p class="sub" id="rolAyuda" style="margin-top:6px"></p>
+      <label for="eLider">Líder (aprueba primero sus permisos)</label>
+      <select id="eLider"></select>
       <label>Lugar de trabajo</label>
       <div class="checks" id="eLugares"></div>
       <label for="eTemp">Contraseña temporal (opcional)</label>
@@ -398,7 +431,7 @@ window.addEventListener('load', function(){
         <p class="sub" id="recEstado">Consultando…</p>
         <button class="sec oculto" id="btnRecActivar" onclick="activarRecAdmin()">Activar recordatorios automáticos</button>
       </div>
-      <p class="sub" style="margin-top:14px">Para cargar muchos empleados de una vez, pégalos en la hoja Empleados (Correo, Nombre, Cargo, Lugar, Activo, y en la columna Rol: Empleado, Supervisor, RRHH o Admin). <a id="linkHoja" target="_blank" href="#">Abrir la hoja de cálculo</a></p>
+      <p class="sub" style="margin-top:14px">Para cargar muchos empleados de una vez, pégalos en la hoja Empleados (Correo, Nombre, Cargo, Lugar, Activo, en la columna Rol: Empleado, Supervisor, RRHH o Admin, y en la columna Lider el correo de su líder). <a id="linkHoja" target="_blank" href="#">Abrir la hoja de cálculo</a></p>
     </div>
 
     <div id="aLug" class="panel oculto">
@@ -483,6 +516,24 @@ window.addEventListener('load', function(){
     <li>Si ya la instalaste, búscala en tu pantalla de inicio o en el cajón de apps.</li>
   </ul>
   <button onclick="cerrarDlg('dlgAyuda')">Entendido</button>
+</dialog>
+<dialog class="dlg" id="dlgAprobar">
+  <h3 id="daTitulo">Aprobar permiso</h3>
+  <p id="daQuien"></p>
+  <div id="daHoras"></div>
+  <div id="daRepBloque">
+    <div class="checks"><label><input type="checkbox" id="daReponer" onchange="pintarReponer()"> Debe reponer las horas un día de fin de semana</label></div>
+    <div id="daRepCampos" class="oculto">
+      <div class="fila">
+        <div><label for="daFecha">Día para reponer</label><input id="daFecha" type="date"></div>
+        <div><label for="daHrs">Horas</label><input id="daHrs" type="number" min="0.5" max="12" step="0.5"></div>
+      </div>
+    </div>
+  </div>
+  <label for="daNota" id="daNotaTxt">Nota para el colaborador (opcional)</label>
+  <textarea id="daNota" rows="2" maxlength="300"></textarea>
+  <button id="daOk" onclick="confirmarLider()">Aprobar</button>
+  <button class="sec" onclick="cerrarDlg('dlgAprobar')">Cancelar</button>
 </dialog>
 <div id="toast" class="oculto"></div>
 <div id="cargando" class="oculto">Un momento…</div>
@@ -634,6 +685,8 @@ function iniciar(r){
   $('miLugar').textContent = r.lugares === 'LIBRE' ? 'Libre: puedes marcar desde cualquier sitio.'
     : r.lugares.length ? r.lugares.map(l => l.nombre + ' (radio ' + l.radio + ' m)').join(', ') : 'Sin lugar asignado.';
   $('tabPanel').classList.toggle('oculto', !r.emp.rol || r.emp.rol === 'Empleado');
+  $('tabEquipo').classList.toggle('oculto', !r.esLider);
+  pintarBadgeEq(0);
   pintarEstado(r.estado);
   $('pDesde').value = r.hoy;
   ver('vEmp'); tab(document.querySelector('#vEmp .tabs button'));
@@ -642,6 +695,7 @@ function iniciar(r){
   revisarGps();
   pintarPush();
   refrescarPush();
+  if (r.esLider && r.ahoraMs) { if (location.hash === '#equipo') revisarHashEquipo(); else precargarEquipo(); }
 }
 async function entrar(){
   const correo = $('lgCorreo').value.trim(), clave = $('lgClave').value;
@@ -822,16 +876,137 @@ async function enviarPermiso(){
   ['pMotivo','pHasta','pHD','pHH'].forEach(id => $(id).value = '');
   cargarMisPermisos();
 }
-function permisoHTML(p, admin){
+function claseEstado(e){ return e === 'Pendiente líder' ? 'Lider' : String(e || '').split(' ')[0]; }
+function textoEstado(p, admin){
+  if (p.estado === 'Pendiente líder') return admin ? 'Espera al líder' : 'Esperando a tu líder';
+  if (p.estado === 'Pendiente' && p.revisadoLider) return admin ? 'Aprobado por líder' : 'Falta Administración';
+  return p.estado;
+}
+function rangoPermiso(p){
   const rango = p.desde === p.hasta ? fechaLarga(p.desde) : fechaLarga(p.desde) + ' al ' + fechaLarga(p.hasta);
-  const horas = p.horaDesde ? (' de ' + (esc(p.horaDesde)) + (p.horaHasta ? ' a ' + esc(p.horaHasta) : '')) : '';
-  return ('<li>\n    <div class="top"><b>' + (admin ? esc(p.nombre) : esc(p.tipo)) + '</b><span class="estado e-' + (esc(p.estado)) + '">' + (esc(p.estado)) + '</span></div>\n    <div class="meta">' + (admin ? esc(p.tipo) + ', ' : '') + (esc(rango)) + (horas) + '</div>\n    <div style="margin-top:4px">' + (esc(p.motivo)) + '</div>\n    ' + (p.respuesta ? ('<div class="meta" style="margin-top:4px">Respuesta: ' + (esc(p.respuesta)) + '</div>') : '') + (admin && p.revisadoPor ? '<div class="meta">' + esc(p.estado) + ' por ' + esc(p.revisadoPor) + '</div>' : '') + '\n    ' + (admin && p.estado === 'Pendiente' ? ('<div class="acciones">\n      <button class="ok" onclick="responder(\'' + (esc(p.id)) + '\',\'Aprobado\')">Aprobar</button>\n      <button class="no" onclick="responder(\'' + (esc(p.id)) + '\',\'Rechazado\')">Rechazar</button></div>') : '') + '\n  </li>');
+  const horas = p.horaDesde ? (' de ' + esc(p.horaDesde) + (p.horaHasta ? ' a ' + esc(p.horaHasta) : '')) : '';
+  return esc(rango) + horas;
+}
+function num(n){ n = Number(n) || 0; return (Math.round(n * 10) / 10).toString(); }
+// Horas trabajadas contra esperadas (semana en curso y mes)
+function bloqueHoras(h){
+  if (!h || !h.semana) return '';
+  const linea = (t, o) => {
+    const pct = o.esp > 0 ? Math.min(100, Math.round(o.trab / o.esp * 100)) : 100;
+    return '<div class="lin"><span>' + t + '</span><span><b>' + num(o.trab) + '</b> de ' + num(o.esp) + ' h</span></div>' +
+      '<div class="barra-h"><i style="width:' + pct + '%;' + (o.cumple ? '' : 'background:var(--alerta)') + '"></i></div>';
+  };
+  const ver = h.semana.cumple ? '<div class="ver cumple">✓ Cumple sus horas de la semana</div>'
+    : '<div class="ver falta">Le faltan ' + num(h.semana.debe) + ' h esta semana</div>';
+  return '<div class="horas">' + linea('Esta semana', h.semana) + linea('Este mes', h.mes) + ver + '</div>';
+}
+function infoLider(p){
+  let t = '';
+  if (p.revisadoLider) t += '<div class="meta" style="margin-top:4px">Líder: ' + esc(p.revisadoLiderPor) + ' ' + (p.estado === 'Rechazado' && p.revisadoPor.indexOf('(líder)') > 0 ? 'rechazó' : 'aprobó') + ' el ' + esc(p.revisadoLider) + (p.respuestaLider ? '. Nota: ' + esc(p.respuestaLider) : '') + '</div>';
+  if (p.reponerFecha) t += '<span class="rep">Repone el ' + esc(fechaLarga(p.reponerFecha)) + ' (' + esc(p.reponerHoras) + ' h)</span>';
+  return t;
+}
+function permisoHTML(p, admin, soloLectura){
+  const esAdmin = S.A && S.A.yo && S.A.yo.rol === 'Admin';
+  const verde = !p.horas || p.horas.semana.cumple;
+  let acc = '';
+  if (soloLectura) acc = '';
+  else if (admin && p.estado === 'Pendiente') acc = '<div class="acciones">' +
+      '<button class="' + (verde ? 'verde' : 'rojo') + '" onclick="responder(\'' + esc(p.id) + '\',\'Aprobado\')">Aprobar</button>' +
+      '<button class="no" onclick="responder(\'' + esc(p.id) + '\',\'Rechazado\')">Rechazar</button></div>';
+  else if (admin && p.estado === 'Pendiente líder' && esAdmin) acc = '<div class="acciones">' +
+      '<button class="sec" onclick="responder(\'' + esc(p.id) + '\',\'Aprobado\',1)">Aprobar sin líder</button>' +
+      '<button class="no" onclick="responder(\'' + esc(p.id) + '\',\'Rechazado\',1)">Rechazar</button></div>';
+  return '<li' + (admin && p.horas ? ' class="' + (verde ? 'l-cumple' : 'l-falta') + '"' : '') + '>' +
+    '<div class="top"><b>' + (admin ? esc(p.nombre) : esc(p.tipo)) + '</b><span class="estado e-' + esc(claseEstado(p.estado)) + '">' + esc(textoEstado(p, admin)) + '</span></div>' +
+    '<div class="meta">' + (admin ? esc(p.tipo) + ', ' : '') + rangoPermiso(p) + (admin && p.duracion ? '. Pide ' + num(p.duracion) + ' h' : '') + '</div>' +
+    '<div style="margin-top:4px">' + esc(p.motivo) + '</div>' +
+    infoLider(p) +
+    (p.respuesta ? '<div class="meta" style="margin-top:4px">Respuesta: ' + esc(p.respuesta) + '</div>' : '') +
+    (admin && p.revisadoPor ? '<div class="meta">' + esc(p.estado) + ' por ' + esc(p.revisadoPor) + '</div>' : '') +
+    (admin && p.estado === 'Pendiente' ? bloqueHoras(p.horas) : '') +
+    acc + '</li>';
 }
 async function cargarMisPermisos(){
   const rows = await call('misPermisos', S.token);
   $('listaMisPerm').innerHTML = rows.length ? rows.map(p => permisoHTML(p, false)).join('')
     : '<li class="vacio">No has enviado solicitudes.</li>';
 }
+
+/* Líder: su equipo, horas y permisos por aprobar */
+function pintarBadgeEq(n){ $('badgeEq').textContent = n ? '(' + n + ')' : ''; }
+function precargarEquipo(){
+  if (!S.datos || !S.datos.esLider) return;
+  google.script.run.withSuccessHandler(r => { S.EQ = r; pintarBadgeEq(r.pendientes.length); }).withFailureHandler(() => {}).equipoLider(S.token);
+}
+async function cargarEquipo(){
+  const r = S.EQ = await call('equipoLider', S.token);
+  pintarBadgeEq(r.pendientes.length);
+  $('eqResumen').textContent = 'Eres líder de ' + r.miembros.length + (r.miembros.length === 1 ? ' persona' : ' personas') +
+    '. Tú apruebas primero sus permisos; después los revisa Administración.';
+  $('eqLeyenda').textContent = 'Horas trabajadas contra las esperadas (' + num(r.horasDia) + ' h por día laboral, hasta ayer). Verde: cumple. Rojo: le faltan horas.';
+  $('eqPend').innerHTML = r.pendientes.length ? r.pendientes.map((p, i) => {
+    const verde = !p.horas || p.horas.semana.cumple;
+    return '<li class="' + (verde ? 'l-cumple' : 'l-falta') + '"><div class="top"><b>' + esc(p.nombre) + '</b><span class="estado e-Lider">' + esc(p.tipo) + '</span></div>' +
+      '<div class="meta">' + rangoPermiso(p) + (p.duracion ? '. Pide ' + num(p.duracion) + ' h' : '') + '</div>' +
+      '<div style="margin-top:4px">' + esc(p.motivo) + '</div>' + bloqueHoras(p.horas) +
+      '<div class="acciones"><button class="' + (verde ? 'verde' : 'rojo') + '" onclick="abrirAprobar(' + i + ',\'Aprobado\')">Aprobar</button>' +
+      '<button class="no" onclick="abrirAprobar(' + i + ',\'Rechazado\')">Rechazar</button></div></li>';
+  }).join('') : '<li class="vacio">No tienes permisos por aprobar.</li>';
+  $('eqMiembros').innerHTML = r.miembros.length ? r.miembros.map(m => {
+    const ok = m.semana.cumple;
+    return '<li class="' + (ok ? 'l-cumple' : 'l-falta') + '"><div class="top"><b>' + esc(m.nombre) + '</b><span class="meta">' +
+      (m.hoy === 'presente' ? 'Hoy: presente' : m.hoy === 'salió' ? 'Hoy: ya salió' : 'Hoy: sin marcar') + '</span></div>' +
+      (m.cargo ? '<div class="meta">' + esc(m.cargo) + '</div>' : '') + bloqueHoras(m) + '</li>';
+  }).join('') : '<li class="vacio">Nadie tiene asignado este líder.</li>';
+  $('eqRecientes').innerHTML = r.recientes.length ? r.recientes.map(p => permisoHTML(p, true, true)).join('') : '<li class="vacio">Sin decisiones todavía.</li>';
+}
+function isoDia(f){ const [y,m,d] = f.split('-').map(Number); const k = new Date(y, m-1, d).getDay(); return k === 0 ? 7 : k; }
+function sumarDia(f, n){ const [y,m,d] = f.split('-').map(Number); return new Date(y, m-1, d + n).toLocaleDateString('en-CA'); }
+function esLaboral(f){ return (S.EQ.diasLaborales || [1,2,3,4,5]).indexOf(isoDia(f)) >= 0; }
+function proximoLibre(){
+  const hoy = hoyLocal();
+  for (let k = 1; k <= 14; k++){ const f = sumarDia(hoy, k); if (!esLaboral(f)) return f; }
+  return sumarDia(hoy, 1);
+}
+function pintarReponer(){ $('daRepCampos').classList.toggle('oculto', !$('daReponer').checked); }
+function abrirAprobar(i, decision){
+  const p = S.daP = S.EQ.pendientes[i]; S.daDec = decision;
+  const aprobar = decision === 'Aprobado', verde = !p.horas || p.horas.semana.cumple;
+  $('daTitulo').textContent = aprobar ? 'Aprobar permiso' : 'Rechazar permiso';
+  $('daQuien').innerHTML = '<b>' + esc(p.nombre) + '</b>: ' + esc(p.tipo) + ', ' + rangoPermiso(p) + (p.duracion ? '. Pide ' + num(p.duracion) + ' h.' : '.');
+  $('daHoras').innerHTML = bloqueHoras(p.horas);
+  $('daRepBloque').classList.toggle('oculto', !aprobar);
+  $('daReponer').checked = false; pintarReponer();
+  $('daFecha').min = sumarDia(hoyLocal(), 1);
+  $('daFecha').value = proximoLibre();
+  $('daHrs').value = p.duracion > 0 ? Math.min(S.EQ.horasDia, p.duracion) : S.EQ.horasDia;
+  $('daNota').value = '';
+  $('daNotaTxt').textContent = aprobar ? 'Nota para el colaborador (opcional)' : 'Motivo del rechazo (opcional)';
+  $('daOk').textContent = aprobar ? 'Aprobar' : 'Rechazar';
+  $('daOk').className = aprobar ? (verde ? 'verde' : 'rojo') : '';
+  abrirDlg('dlgAprobar');
+}
+async function confirmarLider(){
+  const rep = S.daDec === 'Aprobado' && $('daReponer').checked;
+  if (rep){
+    const f = $('daFecha').value, h = Number($('daHrs').value);
+    if (!f || f <= hoyLocal()) return toast('Elige un día futuro para reponer.', true);
+    if (esLaboral(f)) return toast('La reposición debe ser en fin de semana (día no laboral).', true);
+    if (!(h >= 0.5 && h <= 12)) return toast('Las horas a reponer deben estar entre 0.5 y 12.', true);
+  }
+  const msg = await call('responderPermisoLider', S.token, S.daP.id, S.daDec, $('daNota').value,
+    rep ? $('daFecha').value : '', rep ? $('daHrs').value : '');
+  cerrarDlg('dlgAprobar');
+  toast(msg);
+  cargarEquipo();
+}
+function revisarHashEquipo(){
+  if (location.hash !== '#equipo' || !S.datos || !S.datos.esLider || $('vEmp').classList.contains('oculto')) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  tab($('tabEquipo')); cargarEquipo();
+}
+window.addEventListener('hashchange', revisarHashEquipo);
 
 /* Administración */
 function fechasReporte(){
@@ -896,9 +1071,17 @@ async function cargarAdmin(){
   pintarHoy();
   $('badgePend').textContent = r.pendientes.length ? '(' + r.pendientes.length + ')' : '';
   $('listaPend').innerHTML = r.pendientes.length ? r.pendientes.map(p => permisoHTML(p, true)).join('') : '<li class="vacio">No hay solicitudes por revisar.</li>';
+  $('totalEspLider').textContent = r.esperandoLider.length ? '(' + r.esperandoLider.length + ')' : '';
+  $('listaEspLider').innerHTML = r.esperandoLider.length ? r.esperandoLider.map(p => permisoHTML(p, true)).join('') : '<li class="vacio">Ninguna solicitud espera a un líder.</li>';
   $('listaRes').innerHTML = r.resueltos.length ? r.resueltos.map(p => permisoHTML(p, true)).join('') : '<li class="vacio">Sin historial todavía.</li>';
   $('totalEmp').textContent = '(' + r.empleados.length + ')';
-  pintarEmps(); pintarChecks(); pintarLugares();
+  pintarEmps(); pintarChecks(); pintarLugares(); pintarLideres();
+}
+function pintarLideres(sel){
+  const op = S.A.empleados.filter(e => e.activo !== 'NO').slice().sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
+  $('eLider').innerHTML = '<option value="">Sin líder (va directo a Administración)</option>' +
+    op.map(e => '<option value="' + esc(e.correo) + '">' + esc(e.nombre) + ' (' + esc(e.correo) + ')</option>').join('');
+  $('eLider').value = sel || '';
 }
 
 function pintarHoy(){
@@ -916,7 +1099,7 @@ function pintarHoy(){
 function pintarEmps(){
   const q = $('buscarEmp').value.trim().toLowerCase();
   const E = S.A.empleados.map((e,i) => Object.assign({}, e, { i: i })).filter(e => !q || (e.nombre + ' ' + e.correo).toLowerCase().includes(q));
-  $('listaEmp').innerHTML = E.length ? E.slice(0, 300).map(e => ('\n    <li onclick="editarEmp(' + (e.i) + ')" style="cursor:pointer"><div class="top"><b>' + (esc(e.nombre)) + '</b>\n    <span class="meta">' + (e.activo === 'NO' ? 'Inactivo' : !e.tieneClave ? 'Sin contraseña' : e.debeCambiar ? 'Clave temporal' : '') + '</span></div>\n    <div class="meta">' + (e.rol && e.rol !== 'Empleado' ? '<b>' + esc(e.rol) + '</b>. ' : '') + (esc(e.correo)) + '. ' + (esc(e.lugar || 'Sin lugar asignado')) + '</div></li>')).join('')
+  $('listaEmp').innerHTML = E.length ? E.slice(0, 300).map(e => ('\n    <li onclick="editarEmp(' + (e.i) + ')" style="cursor:pointer"><div class="top"><b>' + (esc(e.nombre)) + '</b>\n    <span class="meta">' + (e.activo === 'NO' ? 'Inactivo' : !e.tieneClave ? 'Sin contraseña' : e.debeCambiar ? 'Clave temporal' : '') + '</span></div>\n    <div class="meta">' + (e.rol && e.rol !== 'Empleado' ? '<b>' + esc(e.rol) + '</b>. ' : '') + (esc(e.correo)) + '. ' + (esc(e.lugar || 'Sin lugar asignado')) + (e.liderNombre ? '. Líder: ' + esc(e.liderNombre) : '') + '</div></li>')).join('')
     : '<li class="vacio">' + (S.A.empleados.length ? 'Nadie coincide con la búsqueda.' : 'Todavía no hay empleados.') + '</li>';
 }
 function pintarChecks(sel){
@@ -933,18 +1116,19 @@ function editarEmp(i){
   if (![...$('eRol').options].some(o => o.value === e.rol)) $('eRol').insertAdjacentHTML('beforeend', '<option>' + esc(e.rol) + '</option>');
   $('eRol').value = e.rol || 'Empleado'; $('eRol').onchange();
   pintarChecks(e.lugar);
+  pintarLideres(e.lider);
   $('empFormTitulo').textContent = 'Editar empleado';
   $('aEmp').scrollIntoView();
 }
 function limpiarEmp(){
   S.empOriginal = '';
   ['eCorreo','eNombre','eCargo','eTemp'].forEach(id => $(id).value = '');
-  $('eActivo').value = 'SI'; pintarChecks(); pintarRoles(); $('empFormTitulo').textContent = 'Agregar empleado';
+  $('eActivo').value = 'SI'; pintarChecks(); pintarRoles(); pintarLideres(); $('empFormTitulo').textContent = 'Agregar empleado';
 }
 async function guardarEmp(){
   const lugar = [...document.querySelectorAll('#eLugares input:checked')].map(c => c.value).join(', ');
   const d = { original:S.empOriginal || '', correo:$('eCorreo').value, nombre:$('eNombre').value, cargo:$('eCargo').value,
-              activo:$('eActivo').value, lugar, rol:$('eRol').value, claveTemporal:$('eTemp').value };
+              activo:$('eActivo').value, lugar, rol:$('eRol').value, lider:$('eLider').value, claveTemporal:$('eTemp').value };
   toast(await call('guardarEmpleado', S.adm, d));
   limpiarEmp(); cargarAdmin();
 }
@@ -959,7 +1143,8 @@ async function cambiarPinAd(){
   toast(await call('cambiarPinAdmin', S.adm, $('nuevoPinAd').value.trim()));
   $('nuevoPinAd').value = '';
 }
-async function responder(id, estado){
+async function responder(id, estado, sinLider){
+  if (sinLider && !confirm('Esta solicitud todavía no la revisa el líder. ¿Decidir de todas formas?')) return;
   const resp = prompt(estado === 'Aprobado' ? 'Nota para el empleado (opcional):' : 'Motivo del rechazo (opcional):');
   if (resp === null) return;
   toast(await call('responderPermiso', S.adm, id, estado, resp));

@@ -9,7 +9,7 @@ if (self.FIREBASE_CONFIG && self.FIREBASE_CONFIG.apiKey) {
 }
 
 // Al cambiar archivos de la app, sube el número de VERSION para que los teléfonos se actualicen.
-const VERSION = 'asistencia-v9';
+const VERSION = 'asistencia-v10';
 const BASE = ['./', './index.html', './config.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png'];
 

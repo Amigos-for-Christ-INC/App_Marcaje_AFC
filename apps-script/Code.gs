@@ -10,9 +10,12 @@
  */
 
 const H = { EMP: 'Empleados', LUG: 'Lugares', MAR: 'Marcas', PER: 'Permisos', CFG: 'Config', DIS: 'Dispositivos' };
-const EMP_COLS = ['Correo', 'Nombre', 'Cargo', 'Lugar', 'Activo', 'Hash', 'Sal', 'DebeCambiar', 'Rol'];
+const EMP_COLS = ['Correo', 'Nombre', 'Cargo', 'Lugar', 'Activo', 'Hash', 'Sal', 'DebeCambiar', 'Rol', 'Lider'];
 const MAR_COLS = ['ID', 'Fecha', 'Correo', 'Nombre', 'Entrada', 'Salida', 'Horas', 'LatEntrada', 'LngEntrada', 'MetrosEntrada', 'LatSalida', 'LngSalida', 'MetrosSalida', 'Lugar', 'Observacion', 'IdsCliente'];
-const PER_COLS = ['ID', 'Solicitado', 'Correo', 'Nombre', 'Tipo', 'Desde', 'Hasta', 'HoraDesde', 'HoraHasta', 'Motivo', 'Estado', 'Respuesta', 'Revisado', 'RevisadoPor'];
+const PER_COLS = ['ID', 'Solicitado', 'Correo', 'Nombre', 'Tipo', 'Desde', 'Hasta', 'HoraDesde', 'HoraHasta', 'Motivo', 'Estado', 'Respuesta', 'Revisado', 'RevisadoPor',
+  'Lider', 'RevisadoLider', 'RevisadoLiderPor', 'RespuestaLider', 'ReponerFecha', 'ReponerHoras'];
+// Estados de un permiso: 'Pendiente líder' (espera al líder) -> 'Pendiente' (espera a Administración) -> 'Aprobado' o 'Rechazado'
+const PEND_LIDER = 'Pendiente líder';
 // Roles: Empleado (solo marca), Supervisor (asistencia y permisos de su lugar),
 // RRHH (todo el personal, crea empleados), Admin (todo, incluidos roles, lugares y PIN)
 const ROLES = ['Empleado', 'Supervisor', 'RRHH', 'Admin'];
@@ -35,7 +38,7 @@ function doGet() {
 function apiPublica_() {
   return {
     obtenerEmpresa, login, loginMicrosoft, sesion, cerrarSesion, pedirCodigo, restablecerClave, cambiarClave,
-    marcar, sincronizarMarcas, misMarcas, solicitarPermiso, misPermisos,
+    marcar, sincronizarMarcas, misMarcas, solicitarPermiso, misPermisos, equipoLider, responderPermisoLider,
     adminLogin, adminResumen, responderPermiso, guardarEmpleado, guardarLugar, cambiarPinAdmin,
     reporte, reporteADrive, estadoRespaldo, respaldarAhora, activarRespaldoMensual,
     guardarAvisos, probarAviso,
@@ -67,9 +70,9 @@ function olvidarMemoria_() { _cfg = null; _emps = null; _lugs = null; }
 // Revisa/crea las hojas solo una vez cada 6 horas (no en cada petición)
 function setupUnaVez_() {
   const c = cache_();
-  if (c.get('SETUP_V5')) return;
+  if (c.get('SETUP_V6')) return;
   setup_();
-  c.put('SETUP_V5', '1', 21600);
+  c.put('SETUP_V6', '1', 21600);
 }
 
 function ss_() {
@@ -106,7 +109,7 @@ function setup_() {
   }
   // Horario de los recordatorios (se pueden cambiar en la hoja Config)
   const claves = cfg.getRange(1, 1, Math.max(cfg.getLastRow(), 1), 1).getDisplayValues().map(r => r[0]);
-  [['DIAS_LABORALES', '1,2,3,4,5'], ['AVISOS_ENTRADA', '08:00,08:15,08:30'], ['AVISOS_SALIDA', '17:00'], ['FERIADOS', ''], ['DOMINIO_MICROSOFT', 'amigosforchrist.org']]
+  [['DIAS_LABORALES', '1,2,3,4,5'], ['AVISOS_ENTRADA', '08:00,08:15,08:30'], ['AVISOS_SALIDA', '17:00'], ['FERIADOS', ''], ['DOMINIO_MICROSOFT', 'amigosforchrist.org'], ['HORAS_DIA', '8']]
     .forEach(([k, v]) => { if (claves.indexOf(k) < 0) writeText_(cfg, cfg.getLastRow() + 1, [[k, v]]); });
   _cfg = null;
 }
@@ -189,8 +192,22 @@ function empleados_() {
   return _emps = rows_(H.EMP).map((r, i) => ({
     row: i + 2, correo: correo_(r[0]), nombre: r[1], cargo: r[2], lugar: r[3],
     activo: String(r[4]).trim().toUpperCase() === 'NO' ? 'NO' : 'SI', hash: r[5], sal: r[6],
-    debeCambiar: String(r[7]).trim().toUpperCase() === 'SI', rol: normRol_(r[8])
+    debeCambiar: String(r[7]).trim().toUpperCase() === 'SI', rol: normRol_(r[8]), liderTxt: String(r[9] || '').trim()
   })).filter(e => e.correo);
+}
+// Líder del empleado (columna Lider: su correo; también se acepta el nombre exacto).
+// Devuelve el empleado líder activo, o null si no tiene o no es válido.
+function liderDe_(e) {
+  const t = String(e && e.liderTxt || '').trim();
+  if (!t) return null;
+  const c = correo_(t);
+  const l = empleados_().find(x => x.correo === c) || empleados_().find(x => String(x.nombre).trim().toLowerCase() === t.toLowerCase());
+  if (!l || l.activo === 'NO' || l.correo === e.correo) return null;
+  return l;
+}
+// Correos de las personas que tienen a este empleado como líder
+function equipoDe_(correoLider) {
+  return empleados_().filter(x => x.activo === 'SI' && (liderDe_(x) || {}).correo === correoLider);
 }
 function normRol_(r) {
   r = String(r || '').trim().toUpperCase();
@@ -297,7 +314,7 @@ function datosInicio_(e, token) {
   return {
     token: token, emp: publico_(e), estado: estado_(e.correo), hoy: hoy_(), empresa: cfg_('EMPRESA'),
     lugares: ls === LIBRE ? 'LIBRE' : ls, precisionMax: Number(cfg_('PRECISION_MAX_METROS')) || 100,
-    ahoraMs: Date.now()
+    ahoraMs: Date.now(), esLider: equipoDe_(e.correo).length > 0
   };
 }
 
@@ -538,7 +555,9 @@ function misMarcas(token) {
 /* ================= Permisos ================= */
 function permisoObj_(r) {
   return { id: r[0], solicitado: r[1], correo: r[2], nombre: r[3], tipo: r[4], desde: r[5], hasta: r[6],
-    horaDesde: r[7], horaHasta: r[8], motivo: r[9], estado: r[10], respuesta: r[11], revisado: r[12], revisadoPor: r[13] || '' };
+    horaDesde: r[7], horaHasta: r[8], motivo: r[9], estado: r[10], respuesta: r[11], revisado: r[12], revisadoPor: r[13] || '',
+    lider: r[14] || '', revisadoLider: r[15] || '', revisadoLiderPor: r[16] || '', respuestaLider: r[17] || '',
+    reponerFecha: r[18] || '', reponerHoras: r[19] || '' };
 }
 
 function solicitarPermiso(token, p) {
@@ -547,13 +566,32 @@ function solicitarPermiso(token, p) {
   if (!p.desde) throw new Error('Indica la fecha del permiso.');
   if (!String(p.motivo || '').trim()) throw new Error('Escribe el motivo.');
   if (p.hasta && p.hasta < p.desde) throw new Error('La fecha "hasta" no puede ser antes de "desde".');
+  const lider = liderDe_(e);
+  const estado = lider ? PEND_LIDER : 'Pendiente';
+  const id = id_();
   lock_(() => {
     const sh = sh_(H.PER);
-    writeText_(sh, sh.getLastRow() + 1, [[id_(), ahora_(), e.correo, e.nombre, p.tipo, p.desde, p.hasta || p.desde,
-      p.horaDesde || '', p.horaHasta || '', String(p.motivo).trim().slice(0, 500), 'Pendiente', '', '', '']]);
+    writeText_(sh, sh.getLastRow() + 1, [[id, ahora_(), e.correo, e.nombre, p.tipo, p.desde, p.hasta || p.desde,
+      p.horaDesde || '', p.horaHasta || '', String(p.motivo).trim().slice(0, 500), estado, '', '', '',
+      lider ? lider.correo : '', '', '', '', '', '']]);
   });
-  avisarPermiso_(e, p);   // si el correo falla, la solicitud igual queda guardada
+  // Si el correo o la notificación fallan, la solicitud igual queda guardada
+  if (lider) {
+    avisarPermiso_(e, p, { para: [lider.correo], titulo: 'Un colaborador de tu equipo pidió permiso',
+      asunto: 'Permiso por aprobar (líder): ', boton: 'Abrir la app para aprobar', link: '#equipo' });
+    pushA_([lider.correo], 'Permiso por aprobar', e.nombre + ' pidió ' + p.tipo.toLowerCase() + ' (' + rangoTxt_(p) + ').', 'permiso', '#equipo');
+    avisarPermiso_(e, p, { titulo: 'Nueva solicitud de permiso (primero la revisa el líder)', asunto: 'Permiso solicitado (espera al líder): ',
+      filasExtra: [['Líder', lider.nombre]], boton: 'Abrir la app' });
+    return 'Solicitud enviada. Primero la revisa tu líder (' + lider.nombre + ') y luego Administración.';
+  }
+  avisarPermiso_(e, p);
+  pushA_(correosAviso_(), 'Permiso por aprobar', e.nombre + ' pidió ' + p.tipo.toLowerCase() + ' (' + rangoTxt_(p) + ').', 'permiso');
   return 'Solicitud enviada. Queda pendiente de aprobación.';
+}
+
+function rangoTxt_(p) {
+  const h = p.hasta || p.desde;
+  return (!h || h === p.desde) ? p.desde : p.desde + ' al ' + h;
 }
 
 /* ================= Avisos por correo ================= */
@@ -561,34 +599,51 @@ function correosAviso_() {
   return cfg_('AVISO_PERMISOS').split(/[,;\s]+/).map(correo_).filter(c => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(c));
 }
 
-function avisarPermiso_(e, p) {
+// o (opcional): { para, titulo, asunto, filasExtra: [[k, v]], boton, link }
+// Sin "para" se envía a la lista AVISO_PERMISOS (Administración).
+function avisarPermiso_(e, p, o) {
+  o = o || {};
   try {
-    const para = correosAviso_();
+    const para = (o.para || correosAviso_()).filter(c => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(c));
     if (!para.length || MailApp.getRemainingDailyQuota() < para.length) return;
     const x = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-    const fechas = (!p.hasta || p.hasta === p.desde) ? p.desde : p.desde + ' al ' + p.hasta;
+    const fechas = rangoTxt_(p);
     const horas = p.horaDesde ? (p.horaDesde + (p.horaHasta ? ' a ' + p.horaHasta : '')) : 'Todo el día';
-    const fila = (k, v) => '<tr><td style="padding:6px 12px 6px 0;color:#6D6E71">' + k + '</td><td style="padding:6px 0;color:#414042"><b>' + x(v) + '</b></td></tr>';
-    let url = '';
-    url = cfg_('URL_APP');   // enlace de la app instalable (Config: URL_APP)
+    const fila = (k, v) => '<tr><td style="padding:6px 12px 6px 0;color:#6D6E71">' + x(k) + '</td><td style="padding:6px 0;color:#414042"><b>' + x(v) + '</b></td></tr>';
+    let url = cfg_('URL_APP');   // enlace de la app instalable (Config: URL_APP)
     if (!url) { try { url = ScriptApp.getService().getUrl(); } catch (err) {} }
+    if (url && o.link) url = url.replace(/#.*$/, '') + o.link;
+    const extra = (o.filasExtra || []).filter(f => f[1] !== '' && f[1] != null).map(f => fila(f[0], f[1])).join('');
     const html =
       '<div style="font-family:Raleway,Arial,sans-serif;max-width:520px">' +
-      '<div style="background:#0A2240;color:#FFFFFF;padding:16px 20px;font-size:18px;font-weight:bold">Nueva solicitud de permiso</div>' +
+      '<div style="background:#0A2240;color:#FFFFFF;padding:16px 20px;font-size:18px;font-weight:bold">' + x(o.titulo || 'Nueva solicitud de permiso') + '</div>' +
       '<div style="padding:16px 20px;background:#FFFFFF;border:1px solid #E3E0E7">' +
       '<table style="border-collapse:collapse;font-size:15px">' +
       fila('Empleado', e.nombre) + fila('Correo', e.correo) + fila('Lugar', e.lugar) + fila('Tipo', p.tipo) +
-      fila('Fecha', fechas) + fila('Horario', horas) + fila('Motivo', String(p.motivo).trim()) +
+      fila('Fecha', fechas) + fila('Horario', horas) + fila('Motivo', String(p.motivo || '').trim()) + extra +
       '</table>' +
-      (url ? '<p style="margin:18px 0 4px"><a href="' + url + '" style="background:#00758F;color:#FFFFFF;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:bold">Abrir la app para aprobar</a></p>' : '') +
+      (url ? '<p style="margin:18px 0 4px"><a href="' + x(url) + '" style="background:#00758F;color:#FFFFFF;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:bold">' + x(o.boton || 'Abrir la app para aprobar') + '</a></p>' : '') +
       '</div><p style="font-size:12px;color:#6D6E71;padding:0 20px">Aviso automático del control de asistencia.</p></div>';
     MailApp.sendEmail({
       to: para.join(','), name: 'Control de asistencia',
-      subject: 'Permiso pendiente: ' + e.nombre + ' (' + p.tipo + ', ' + fechas + ')',
+      subject: (o.asunto || 'Permiso pendiente: ') + e.nombre + ' (' + p.tipo + ', ' + fechas + ')',
       htmlBody: html
     });
   } catch (err) {
     console.error('No se pudo enviar el aviso de permiso: ' + err);
+  }
+}
+
+// Notificación al teléfono de estas personas (si tienen recordatorios activados). Nunca detiene el proceso.
+function pushA_(correos, titulo, cuerpo, tipo, link) {
+  try {
+    if (!props_().getProperty('FCM_CUENTA_SERVICIO')) return;
+    const dev = dispositivos_(), lista = [];
+    (correos || []).map(correo_).filter((c, i, a) => c && a.indexOf(c) === i).forEach(c => (dev[c] || []).forEach(t =>
+      lista.push({ token: t, titulo: titulo, cuerpo: cuerpo, tipo: tipo || 'permiso', link: link || '' })));
+    if (lista.length) enviarPush_(lista);
+  } catch (err) {
+    console.error('No se pudo enviar la notificación: ' + err);
   }
 }
 
@@ -623,6 +678,159 @@ function probarAviso(tok) {
 function misPermisos(token) {
   const e = sesionEmp_(token);
   return rows_(H.PER).filter(r => correo_(r[2]) === e.correo).slice(-25).reverse().map(permisoObj_);
+}
+
+/* ================= Líderes: horas del equipo y primera aprobación ================= */
+// Fechas como texto yyyy-MM-dd; se calculan en UTC para no depender de la zona horaria.
+function fUTC_(f) { const p = String(f).split('-').map(Number); return Date.UTC(p[0], p[1] - 1, p[2]); }
+function sumarDias_(f, n) { return Utilities.formatDate(new Date(fUTC_(f) + n * 86400000), 'UTC', 'yyyy-MM-dd'); }
+function diaSemana_(f) { const d = new Date(fUTC_(f)).getUTCDay(); return d === 0 ? 7 : d; }   // 1 = lunes ... 7 = domingo
+function diasLaborales_() { return (cfg_('DIAS_LABORALES') || '1,2,3,4,5').split(/[,;\s]+/).map(x => Number(x.trim())).filter(Boolean); }
+function horasDia_() { const h = Number(String(cfg_('HORAS_DIA') || '8').replace(',', '.')); return h > 0 && h <= 24 ? h : 8; }
+function esLaborable_(f, dias, feriados) { return dias.indexOf(diaSemana_(f)) >= 0 && feriados.indexOf(f) < 0; }
+function r2_(n) { return Math.round(n * 100) / 100; }
+
+// Horas que cubre un permiso aprobado en un día laborable (permiso por horas o de día completo)
+function horasPermisoDia_(p, hd) {
+  if (p.horaDesde && p.horaHasta) return Math.min(hd, difHoras_(p.horaDesde, p.horaHasta));
+  if (p.horaDesde || p.horaHasta) return 0;   // llegada tarde o salida temprana sin hora de fin: no se descuenta
+  return hd;
+}
+
+// Duración de lo que pide un permiso, en horas laborables (sugerencia para la reposición)
+function duracionPermiso_(p) {
+  const dias = diasLaborales_(), fer = listaFechas_(cfg_('FERIADOS')), hd = horasDia_();
+  let total = 0, f = p.desde, n = 0;
+  const hasta = p.hasta || p.desde;
+  while (f <= hasta && n++ < 400) {
+    if (esLaborable_(f, dias, fer)) total += (p.horaDesde && p.horaHasta) ? Math.min(hd, difHoras_(p.horaDesde, p.horaHasta)) : (p.horaDesde || p.horaHasta) ? 0 : hd;
+    f = sumarDias_(f, 1);
+  }
+  return r2_(total);
+}
+
+// Horas trabajadas y esperadas de la semana en curso y del mes, para una lista de correos.
+// Trabajadas: horas completas (con salida) desde el lunes (o el día 1) hasta hoy.
+// Esperadas: HORAS_DIA por cada día laborable desde el lunes (o el día 1) hasta AYER, sin contar feriados
+// ni lo cubierto por permisos aprobados. Un permiso aprobado con reposición no se descuenta: esas horas se deben.
+function horasDe_(correos) {
+  const hoy = hoy_(), hd = horasDia_(), dias = diasLaborales_(), fer = listaFechas_(cfg_('FERIADOS'));
+  const lunes = sumarDias_(hoy, 1 - diaSemana_(hoy)), mes1 = hoy.slice(0, 8) + '01';
+  const desde = lunes < mes1 ? lunes : mes1, ayer = sumarDias_(hoy, -1);
+  const quiere = {};
+  correos.forEach(c => quiere[c] = { semana: { trab: 0, esp: 0 }, mes: { trab: 0, esp: 0 }, hoy: '' });
+  // Marcas: se leen solo Fecha..Horas de las últimas filas
+  const sh = sh_(H.MAR), last = sh.getLastRow();
+  if (last >= 2) {
+    const n = Math.min(last - 1, 15000), v = sh.getRange(last - n + 1, 2, n, 6).getDisplayValues();
+    v.forEach(r => {
+      const x = quiere[correo_(r[1])];
+      if (!x || r[0] < desde || r[0] > hoy) return;
+      const h = r[4] ? Number(String(r[5]).replace(',', '.')) || 0 : 0;
+      if (r[0] >= lunes) x.semana.trab += h;
+      if (r[0] >= mes1) x.mes.trab += h;
+      if (r[0] === hoy) x.hoy = r[4] ? 'salió' : (r[3] ? 'presente' : '');
+    });
+  }
+  // Permisos aprobados que excusan horas (sin reposición)
+  const exc = {};
+  rows_(H.PER).forEach(r => {
+    const c = correo_(r[2]);
+    if (!quiere[c] || r[10] !== 'Aprobado' || r[18] || r[6] < desde || r[5] > ayer) return;
+    const p = permisoObj_(r), hp = horasPermisoDia_(p, hd);
+    if (!hp) return;
+    let f = p.desde < desde ? desde : p.desde, k = 0;
+    while (f <= p.hasta && f <= ayer && k++ < 400) { const key = c + '|' + f; exc[key] = Math.min(hd, (exc[key] || 0) + hp); f = sumarDias_(f, 1); }
+  });
+  let f = desde, k = 0;
+  while (f <= ayer && k++ < 62) {
+    if (esLaborable_(f, dias, fer)) {
+      correos.forEach(c => {
+        const esp = Math.max(0, hd - (exc[c + '|' + f] || 0));
+        if (f >= lunes) quiere[c].semana.esp += esp;
+        if (f >= mes1) quiere[c].mes.esp += esp;
+      });
+    }
+    f = sumarDias_(f, 1);
+  }
+  Object.keys(quiere).forEach(c => ['semana', 'mes'].forEach(t => {
+    const o = quiere[c][t];
+    o.trab = r2_(o.trab); o.esp = r2_(o.esp); o.debe = r2_(Math.max(0, o.esp - o.trab)); o.cumple = o.trab >= o.esp;
+  }));
+  return { porCorreo: quiere, lunes: lunes, mes1: mes1, horasDia: hd };
+}
+
+// Lo que ve el líder: su equipo con las horas de la semana y del mes, y los permisos que esperan su decisión
+function equipoLider(token) {
+  const yo = sesionEmp_(token);
+  const equipo = equipoDe_(yo.correo);
+  const H_ = horasDe_(equipo.map(e => e.correo));
+  const enEquipo = {};
+  equipo.forEach(e => enEquipo[e.correo] = true);
+  const mios = rows_(H.PER).map(permisoObj_).filter(p => correo_(p.lider) === yo.correo);
+  const pendientes = mios.filter(p => p.estado === PEND_LIDER).reverse().map(p => Object.assign(p, {
+    horas: (H_.porCorreo[correo_(p.correo)] || horasDe_([correo_(p.correo)]).porCorreo[correo_(p.correo)]),
+    duracion: duracionPermiso_(p) }));
+  return {
+    horasDia: H_.horasDia, lunes: H_.lunes, mes1: H_.mes1, hoy: hoy_(), diasLaborales: diasLaborales_(),
+    miembros: equipo.map(e => Object.assign({ correo: e.correo, nombre: e.nombre, cargo: e.cargo }, H_.porCorreo[e.correo]))
+      .sort((a, b) => String(a.nombre).localeCompare(String(b.nombre))),
+    pendientes: pendientes,
+    recientes: mios.filter(p => p.estado !== PEND_LIDER).slice(-20).reverse()
+  };
+}
+
+// Decisión del líder. Aprobar pasa la solicitud a Administración; rechazar la cierra.
+// reponerFecha (opcional): día NO laborable (fin de semana) en que el colaborador repone las horas.
+function responderPermisoLider(token, id, decision, nota, reponerFecha, reponerHoras) {
+  const yo = sesionEmp_(token);
+  if (['Aprobado', 'Rechazado'].indexOf(decision) < 0) throw new Error('Decisión no válida.');
+  nota = String(nota || '').trim().slice(0, 300);
+  reponerFecha = String(reponerFecha || '').trim();
+  let horasR = '';
+  if (decision === 'Aprobado' && reponerFecha) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(reponerFecha)) throw new Error('Fecha de reposición no válida.');
+    if (reponerFecha <= hoy_()) throw new Error('La reposición debe ser en un día futuro.');
+    if (esLaborable_(reponerFecha, diasLaborales_(), [])) throw new Error('La reposición debe ser en un día no laboral (fin de semana).');
+    horasR = Number(String(reponerHoras || '').replace(',', '.'));
+    if (!(horasR >= 0.5 && horasR <= 12)) throw new Error('Las horas a reponer deben estar entre 0.5 y 12.');
+    horasR = r2_(horasR);
+  } else reponerFecha = '';
+  const res = lock_(() => {
+    const sh = sh_(H.PER), last = sh.getLastRow();
+    if (last < 2) throw new Error('No se encontró la solicitud.');
+    const v = sh.getRange(2, 1, last - 1, PER_COLS.length).getDisplayValues();
+    for (let i = v.length - 1; i >= 0; i--) {
+      if (v[i][0] !== id) continue;
+      const p = permisoObj_(v[i]);
+      if (correo_(p.lider) !== yo.correo) throw new Error('Esta solicitud no está a tu cargo como líder.');
+      if (correo_(p.correo) === yo.correo) throw new Error('No puedes aprobar tu propio permiso.');
+      if (p.estado !== PEND_LIDER) throw new Error('Esta solicitud ya fue respondida (' + p.estado + ').');
+      const cuando = ahora_();
+      if (decision === 'Aprobado') {
+        writeText_(sh, i + 2, [['Pendiente']], 11);
+      } else {
+        writeText_(sh, i + 2, [['Rechazado', nota, cuando, yo.nombre + ' (líder)']], 11);
+      }
+      writeText_(sh, i + 2, [[cuando, yo.nombre, nota, reponerFecha, horasR]], 16);
+      return p;
+    }
+    throw new Error('No se encontró la solicitud.');
+  });
+  // Avisos (fuera del candado)
+  const emp = empPorCorreo_(res.correo) || { nombre: res.nombre, correo: res.correo, lugar: '' };
+  const rep = reponerFecha ? 'Reponer el ' + reponerFecha + ' (' + horasR + ' h)' : '';
+  if (decision === 'Aprobado') {
+    pushA_([res.correo], 'Tu líder aprobó tu permiso', 'Ahora falta la aprobación de Administración.' + (rep ? ' ' + rep + '.' : ''), 'permiso');
+    avisarPermiso_(emp, res, { titulo: 'Permiso aprobado por el líder: falta la aprobación final', asunto: 'Aprobado por el líder, falta Administración: ',
+      filasExtra: [['Aprobado por', yo.nombre + ' (líder)'], ['Nota del líder', nota], ['Reposición', rep]] });
+    pushA_(correosAviso_(), 'Permiso listo para aprobación final', emp.nombre + ': aprobado por su líder ' + yo.nombre + '.', 'permiso');
+    return 'Aprobado. Pasó a Administración para la aprobación final.' + (rep ? ' ' + rep + '.' : '');
+  }
+  pushA_([res.correo], 'Tu líder rechazó tu permiso', nota || 'Abre la app para ver el detalle.', 'permiso');
+  avisarPermiso_(emp, res, { titulo: 'Permiso rechazado por el líder', asunto: 'Rechazado por el líder: ',
+    filasExtra: [['Rechazado por', yo.nombre + ' (líder)'], ['Motivo', nota]], boton: 'Abrir la app' });
+  return 'Permiso rechazado.';
 }
 
 /* ================= Administración ================= */
@@ -660,15 +868,25 @@ function adminResumen(tok) {
       lugar: m ? m[13] : e.lugar, permiso: conPermiso[e.correo] || '', sinConexion: m ? !!m[14] : false };
   });
 
+  // Para decidir: horas de la semana y del mes de quienes tienen permisos por aprobar
+  const pend = permisos.filter(p => p.estado === 'Pendiente').reverse();
+  if (pend.length) {
+    const hs = horasDe_(pend.map(p => correo_(p.correo)).filter((c, i, x) => x.indexOf(c) === i)).porCorreo;
+    pend.forEach(p => { p.horas = hs[correo_(p.correo)]; p.duracion = duracionPermiso_(p); });
+  }
   return {
-    yo: { rol: a.rol, nombre: a.nombre, correo: a.correo },
+    yo: { rol: a.rol, nombre: a.nombre, correo: a.correo }, horasDia: horasDia_(),
     avisos: a.rol === 'Admin' ? cfg_('AVISO_PERMISOS') : '',
     hoy: h, empresa: cfg_('EMPRESA'), url: a.rol === 'Supervisor' ? '' : ss_().getUrl(),
     asistencia: asistencia,
-    pendientes: permisos.filter(p => p.estado === 'Pendiente').reverse(),
-    resueltos: permisos.filter(p => p.estado !== 'Pendiente').slice(-30).reverse(),
-    empleados: a.rol === 'Supervisor' ? [] : emps.map(e => ({ correo: e.correo, nombre: e.nombre, cargo: e.cargo, lugar: e.lugar,
-      activo: e.activo, tieneClave: !!e.hash, debeCambiar: e.debeCambiar, rol: e.rol })),
+    pendientes: pend,
+    esperandoLider: permisos.filter(p => p.estado === PEND_LIDER).reverse(),
+    resueltos: permisos.filter(p => p.estado !== 'Pendiente' && p.estado !== PEND_LIDER).slice(-30).reverse(),
+    empleados: a.rol === 'Supervisor' ? [] : emps.map(e => {
+      const l = liderDe_(e);
+      return { correo: e.correo, nombre: e.nombre, cargo: e.cargo, lugar: e.lugar, activo: e.activo,
+        tieneClave: !!e.hash, debeCambiar: e.debeCambiar, rol: e.rol, lider: l ? l.correo : '', liderNombre: l ? l.nombre : '' };
+    }),
     lugares: lugares_()
   };
 }
@@ -676,7 +894,7 @@ function adminResumen(tok) {
 function responderPermiso(tok, id, estado, respuesta) {
   const a = actor_(tok);
   if (['Aprobado', 'Rechazado'].indexOf(estado) < 0) throw new Error('Estado no válido.');
-  return lock_(() => {
+  const r = lock_(() => {
     const sh = sh_(H.PER);
     const v = sh.getRange(1, 1, sh.getLastRow(), 3).getDisplayValues();
     for (let i = v.length - 1; i >= 1; i--) {
@@ -685,12 +903,20 @@ function responderPermiso(tok, id, estado, respuesta) {
         if (a.correo && quien === a.correo) throw new Error('No puedes aprobar ni rechazar tu propio permiso.');
         const emp = empPorCorreo_(quien);
         if (!emp || !enAlcance_(a, emp.lugar)) throw new Error('Este empleado no está a tu cargo.');
-        writeText_(sh, i + 1, [[estado, respuesta || '', ahora_(), a.nombre]], 11);
-        return 'Permiso ' + estado.toLowerCase();
+        const fila = permisoObj_(sh.getRange(i + 1, 1, 1, PER_COLS.length).getDisplayValues()[0]);
+        if (fila.estado === PEND_LIDER && a.rol !== 'Admin') throw new Error('Esta solicitud todavía espera la aprobación del líder.');
+        if (fila.estado !== 'Pendiente' && fila.estado !== PEND_LIDER) throw new Error('Esta solicitud ya fue respondida (' + fila.estado + ').');
+        writeText_(sh, i + 1, [[estado, String(respuesta || '').slice(0, 300), ahora_(), a.nombre + (fila.estado === PEND_LIDER ? ' (sin esperar al líder)' : '')]], 11);
+        return { p: fila, emp: emp };
       }
     }
     throw new Error('No se encontró la solicitud.');
   });
+  // Avisos: al colaborador y a su líder
+  const p = r.p, rep = p.reponerFecha ? ' Reponer el ' + p.reponerFecha + ' (' + p.reponerHoras + ' h).' : '';
+  pushA_([p.correo], 'Tu permiso fue ' + estado.toLowerCase(), (respuesta ? String(respuesta).slice(0, 120) : rangoTxt_(p)) + (estado === 'Aprobado' ? rep : ''), 'permiso');
+  if (p.lider) pushA_([p.lider], 'Permiso ' + estado.toLowerCase() + ' por Administración', p.nombre + ' (' + rangoTxt_(p) + ').' + (estado === 'Aprobado' ? rep : ''), 'permiso', '#equipo');
+  return 'Permiso ' + estado.toLowerCase();
 }
 
 function guardarEmpleado(tok, d) {
@@ -709,6 +935,13 @@ function guardarEmpleado(tok, d) {
   }
   const temporal = String(d.claveTemporal || '');
   if (temporal) validarClave_(temporal);
+  let lider = d.lider === undefined ? null : correo_(d.lider);
+  if (lider) {
+    if (lider === correo) throw new Error('Una persona no puede ser su propio líder.');
+    const l = empPorCorreo_(lider);
+    if (!l) throw new Error('El líder elegido no está registrado como empleado.');
+    if (l.activo === 'NO') throw new Error('El líder elegido está inactivo.');
+  }
   return lock_(() => {
     const sh = sh_(H.EMP);
     const ex = empPorCorreo_(d.original || correo);
@@ -719,7 +952,8 @@ function guardarEmpleado(tok, d) {
     }
     let hash = ex ? ex.hash : '', sal = ex ? ex.sal : '', debe = ex && ex.debeCambiar ? 'SI' : 'NO';
     if (temporal) { sal = id_(); hash = hash_(temporal, sal); debe = 'SI'; }
-    const fila = [[correo, String(d.nombre).trim(), String(d.cargo || '').trim(), lugar, d.activo === 'NO' ? 'NO' : 'SI', hash, sal, debe, rol]];
+    if (lider === null) lider = ex ? ex.liderTxt : '';
+    const fila = [[correo, String(d.nombre).trim(), String(d.cargo || '').trim(), lugar, d.activo === 'NO' ? 'NO' : 'SI', hash, sal, debe, rol, lider]];
     writeText_(sh, ex ? ex.row : sh.getLastRow() + 1, fila);
     return ex ? 'Empleado actualizado' : 'Empleado agregado';
   });
@@ -795,9 +1029,11 @@ function generarReporte_(a, tipo, desde, hasta, lugar) {
       filas: marcas().filter(r => !r[5]).map(r => [r[1], emps[correo_(r[2])].nombre, correo_(r[2]), r[4], r[13]]) };
   }
   if (tipo === 'permisos') {
-    return { titulo: titulo, encabezados: ['Solicitado', 'Empleado', 'Correo', 'Tipo', 'Desde', 'Hasta', 'Hora inicio', 'Hora fin', 'Motivo', 'Estado', 'Respuesta', 'Revisado por', 'Revisado el'],
+    return { titulo: titulo, encabezados: ['Solicitado', 'Empleado', 'Correo', 'Tipo', 'Desde', 'Hasta', 'Hora inicio', 'Hora fin', 'Motivo', 'Estado',
+        'Líder', 'Líder revisó el', 'Nota del líder', 'Reponer el', 'Horas a reponer', 'Respuesta', 'Revisado por', 'Revisado el'],
       filas: rows_(H.PER).filter(r => r[5] <= hasta && r[6] >= desde && emps[correo_(r[2])])
-        .map(r => [r[1], emps[correo_(r[2])].nombre, correo_(r[2]), r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[13] || '', r[12]]) };
+        .map(r => [r[1], emps[correo_(r[2])].nombre, correo_(r[2]), r[4], r[5], r[6], r[7], r[8], r[9], r[10],
+          r[16] || r[14] || '', r[15] || '', r[17] || '', r[18] || '', r[19] ? Number(r[19]) : '', r[11], r[13] || '', r[12]]) };
   }
   // resumen
   const acc = {};
@@ -988,7 +1224,7 @@ function enviarPush_(lista) {
     const lote = lista.slice(i, i + 100);
     const pedidos = lote.map(m => {
       const webpush = { notification: { tag: 'marcaje-' + m.tipo, renotify: true } };
-      if (base) { webpush.fcm_options = { link: base }; webpush.notification.icon = base + 'icons/icon-192.png'; }
+      if (base) { webpush.fcm_options = { link: base + (m.link || '') }; webpush.notification.icon = base + 'icons/icon-192.png'; }
       return {
         url: 'https://fcm.googleapis.com/v1/projects/' + proyecto + '/messages:send', method: 'post',
         contentType: 'application/json', muteHttpExceptions: true, headers: { Authorization: 'Bearer ' + acceso },
@@ -1036,8 +1272,13 @@ function revisarRecordatorios() {
   const ahora = new Date(), hoy = hoy_();
   const dia = Number(Utilities.formatDate(ahora, tz_(), 'u'));               // 1 = lunes ... 7 = domingo
   const dias = (cfg_('DIAS_LABORALES') || '1,2,3,4,5').split(/[,;\s]+/).map(x => Number(x.trim()));
-  if (dias.indexOf(dia) < 0) return;
-  if (listaFechas_(cfg_('FERIADOS')).indexOf(hoy) >= 0) return;
+  // En días no laborales solo se avisa a quien tiene una reposición aprobada para hoy
+  let solo = null;
+  if (dias.indexOf(dia) < 0 || listaFechas_(cfg_('FERIADOS')).indexOf(hoy) >= 0) {
+    solo = {};
+    rows_(H.PER).forEach(r => { if (r[10] === 'Aprobado' && r[18] === hoy) solo[correo_(r[2])] = true; });
+    if (!Object.keys(solo).length) return;
+  }
   const hm = minutos_(Utilities.formatDate(ahora, tz_(), 'HH:mm'));
   const avisos = listaHoras_(cfg_('AVISOS_ENTRADA') || '08:00,08:15,08:30').map((t, i) => ({ t: t, tipo: 'entrada', n: i }))
     .concat(listaHoras_(cfg_('AVISOS_SALIDA') || '17:00').map((t, i) => ({ t: t, tipo: 'salida', n: i })));
@@ -1046,24 +1287,27 @@ function revisarRecordatorios() {
     const k = 'AVISO_' + hoy + '_' + a.tipo + '_' + a.t, dif = hm - minutos_(a.t);
     if (dif < 0 || dif > 25 || p.getProperty(k)) return;   // a su hora (hasta 25 min de margen) y una sola vez
     p.setProperty(k, ahora_());
-    try { enviarAviso_(a, hoy); } catch (e) { console.error('Recordatorio ' + k + ': ' + e); }
+    try { enviarAviso_(a, hoy, solo); } catch (e) { console.error('Recordatorio ' + k + ': ' + e); }
   });
   // Limpia las marcas de avisos de días anteriores
   const todas = p.getProperties();
   Object.keys(todas).forEach(k => { if (k.indexOf('AVISO_') === 0 && k.indexOf('AVISO_' + hoy) !== 0) p.deleteProperty(k); });
 }
 
-function enviarAviso_(a, hoy) {
+function enviarAviso_(a, hoy, solo) {
   const dev = dispositivos_();
   const marcas = {};
   marcasDeHoy_().forEach(r => { marcas[correo_(r[2])] = r; });
   const permiso = {};
   rows_(H.PER).forEach(r => { if (r[10] === 'Aprobado' && r[5] <= hoy && r[6] >= hoy) permiso[correo_(r[2])] = true; });
   const lista = [];
-  empleados_().filter(e => e.activo === 'SI' && dev[e.correo]).forEach(e => {
+  empleados_().filter(e => e.activo === 'SI' && dev[e.correo] && (!solo || solo[e.correo])).forEach(e => {
     const m = marcas[e.correo], nombre = String(e.nombre || '').trim().split(' ')[0] || '';
     let titulo, cuerpo;
-    if (a.tipo === 'entrada') {
+    if (a.tipo === 'entrada' && solo) {
+      if (m || a.n > 0) return;
+      titulo = 'Hoy repones horas'; cuerpo = 'Buenos días, ' + nombre + '. Hoy tienes una reposición aprobada: marca tu entrada al llegar.';
+    } else if (a.tipo === 'entrada') {
       if (m || permiso[e.correo]) return;
       if (a.n === 0) { titulo = 'Recuerda marcar tu entrada'; cuerpo = 'Buenos días, ' + nombre + '. Marca tu entrada al llegar.'; }
       else if (a.n === 1) { titulo = 'Ya pasó la tolerancia de entrada'; cuerpo = nombre + ', todavía no has marcado tu entrada. Márcala ahora.'; }
