@@ -1352,3 +1352,76 @@ function activarRecordatorios(tok) {
   activarRecordatorios_();
   return 'Recordatorios automáticos activados (se revisan cada 5 minutos).';
 }
+
+/* ================= Datos para Power BI =================
+ * Copia limpia de la base en otra hoja ("Marcaje - Datos para Power BI"), sin contraseñas, PIN ni coordenadas GPS.
+ * Power BI se conecta a ESA hoja (conector Google Sheets), nunca a la base principal.
+ * Primera vez: en el editor elige exportarPowerBI y toca Ejecutar. Crea la hoja, deja el activador
+ * (cada hora, de 5 a. m. a 8 p. m.) y escribe en el registro el enlace para Power BI.
+ */
+function exportarPowerBI() {
+  activarPowerBI_();
+  const hora = Number(Utilities.formatDate(new Date(), tz_(), 'H'));
+  const p = props_();
+  if (p.getProperty('PBI_SS_ID') && (hora < 5 || hora > 20)) return;   // de noche no hace falta
+  let ss = null;
+  const id = p.getProperty('PBI_SS_ID');
+  if (id) { try { ss = SpreadsheetApp.openById(id); } catch (e) { ss = null; } }
+  if (!ss) { ss = SpreadsheetApp.create('Marcaje - Datos para Power BI'); p.setProperty('PBI_SS_ID', ss.getId()); }
+  const num = v => { const n = Number(String(v || '').replace(',', '.')); return isFinite(n) && String(v) !== '' ? n : ''; };
+  const emps = empleados_();
+  const nombre = {};
+  emps.forEach(e => nombre[e.correo] = e.nombre);
+
+  tablaPBI_(ss, 'Empleados', ['Correo', 'Nombre', 'Cargo', 'Lugar', 'Rol', 'Activo', 'LiderCorreo', 'LiderNombre'],
+    emps.map(e => { const l = liderDe_(e); return [e.correo, e.nombre, e.cargo, e.lugar, e.rol, e.activo === 'SI' ? 'Sí' : 'No', l ? l.correo : '', l ? l.nombre : '']; }));
+
+  const sh = sh_(H.MAR), last = sh.getLastRow();
+  const mar = last < 2 ? [] : sh.getRange(2, 1, last - 1, 15).getDisplayValues();
+  tablaPBI_(ss, 'Marcas', ['ID', 'Fecha', 'Correo', 'Nombre', 'Lugar', 'Entrada', 'Salida', 'Horas', 'MetrosEntrada', 'MetrosSalida', 'SinConexion', 'Completa', 'Observacion'],
+    mar.filter(r => r[1] && r[2]).map(r => [r[0], r[1], correo_(r[2]), nombre[correo_(r[2])] || r[3], r[13], r[4], r[5], num(r[6]),
+      num(r[9]), num(r[12]), r[14] ? 'Sí' : 'No', r[4] && r[5] ? 'Sí' : 'No', r[14]]));
+
+  tablaPBI_(ss, 'Permisos', ['ID', 'Solicitado', 'Correo', 'Nombre', 'Tipo', 'Desde', 'Hasta', 'HoraDesde', 'HoraHasta', 'HorasPedidas', 'Motivo', 'Estado',
+      'LiderCorreo', 'LiderRevisoPor', 'LiderReviso', 'NotaLider', 'ReponerFecha', 'ReponerHoras', 'Respuesta', 'RevisadoPor', 'Revisado'],
+    rows_(H.PER).filter(r => r[0]).map(permisoObj_).map(x => [x.id, x.solicitado, correo_(x.correo), x.nombre, x.tipo, x.desde, x.hasta, x.horaDesde, x.horaHasta,
+      duracionPermiso_(x), x.motivo, x.estado, x.lider, x.revisadoLiderPor, x.revisadoLider, x.respuestaLider, x.reponerFecha, num(x.reponerHoras),
+      x.respuesta, x.revisadoPor, x.revisado]));
+
+  tablaPBI_(ss, 'Lugares', ['Lugar', 'RadioMetros'], lugares_().map(l => [l.nombre, l.radio]));
+
+  // Calendario de días laborables (para comparar horas trabajadas contra esperadas)
+  const dias = diasLaborales_(), fer = listaFechas_(cfg_('FERIADOS')), hd = horasDia_();
+  const primera = mar.reduce((m, r) => (r[1] && (!m || r[1] < m)) ? r[1] : m, '') || hoy_();
+  const fin = hoy_().slice(0, 4) + '-12-31', cal = [];
+  for (let f = primera.slice(0, 8) + '01', k = 0; f <= fin && k < 4000; f = sumarDias_(f, 1), k++) {
+    const lab = esLaborable_(f, dias, fer);
+    cal.push([f, Number(f.slice(0, 4)), Number(f.slice(5, 7)), diaSemana_(f), lab ? 'Sí' : 'No', fer.indexOf(f) >= 0 ? 'Sí' : 'No', lab ? hd : 0]);
+  }
+  tablaPBI_(ss, 'Calendario', ['Fecha', 'Anio', 'Mes', 'DiaSemana', 'Laborable', 'Feriado', 'HorasEsperadas'], cal);
+
+  tablaPBI_(ss, 'Info', ['Actualizado', 'HorasDia', 'Empresa'], [[ahora_(), hd, cfg_('EMPRESA')]]);
+  const hoja1 = ss.getSheetByName('Hoja 1') || ss.getSheetByName('Sheet1');
+  if (hoja1 && ss.getSheets().length > 1) ss.deleteSheet(hoja1);
+  Logger.log('Enlace para Power BI (Obtener datos > Google Sheets): ' + ss.getUrl());
+  return ss.getUrl();
+}
+
+function tablaPBI_(ss, nombre, enc, filas) {
+  const sh = ss.getSheetByName(nombre) || ss.insertSheet(nombre);
+  sh.clearContents();
+  const datos = [enc].concat(filas);
+  if (sh.getMaxRows() < datos.length) sh.insertRowsAfter(sh.getMaxRows(), datos.length - sh.getMaxRows());
+  if (sh.getMaxColumns() < enc.length) sh.insertColumnsAfter(sh.getMaxColumns(), enc.length - sh.getMaxColumns());
+  const rg = sh.getRange(1, 1, datos.length, enc.length);
+  rg.setNumberFormat('@');
+  // Las columnas numéricas quedan como número para Power BI
+  enc.forEach((h, j) => { if (/^(Horas|Metros|ReponerHoras|HorasPedidas|HorasEsperadas|Anio|Mes|DiaSemana|RadioMetros|HorasDia)/.test(h) && datos.length > 1) sh.getRange(2, j + 1, datos.length - 1, 1).setNumberFormat('0.00'); });
+  rg.setValues(datos.map(r => r.map(v => v === null || v === undefined ? '' : v)));
+  sh.setFrozenRows(1);
+}
+
+function activarPowerBI_() {
+  if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'exportarPowerBI'))
+    ScriptApp.newTrigger('exportarPowerBI').timeBased().everyHours(1).create();
+}
