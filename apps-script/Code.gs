@@ -1150,6 +1150,9 @@ function aliasDisponible_(r) {
 }
 function enviarCorreo_(m) {
   const r = remitente_();
+  let yo = '';
+  try { yo = correo_(Session.getEffectiveUser().getEmail()); } catch (e) {}
+  if (r && r === yo) { MailApp.sendEmail(m); return; }   // la cuenta dueña ya es el remitente
   if (r && aliasDisponible_(r)) {
     GmailApp.sendEmail(m.to, m.subject, 'Abre este correo en un programa que muestre HTML.', { htmlBody: m.htmlBody, name: m.name, from: r, replyTo: r });
   } else {
@@ -1166,7 +1169,7 @@ function probarRemitente() {
   cache_().remove('ALIAS_' + r);
   Logger.log('Remitente configurado: ' + (r || '(ninguno)'));
   Logger.log('Alias "Enviar como" de ' + yo + ': ' + (alias.length ? alias.join(', ') : '(ninguno)'));
-  Logger.log(aliasDisponible_(r) ? 'OK: los correos saldrán desde ' + r : 'FALTA: agrega ' + r + ' como "Enviar como" en Gmail; mientras tanto saldrán desde ' + yo + ' con Responder a ' + r);
+  Logger.log(r === correo_(yo) || aliasDisponible_(r) ? 'OK: los correos saldrán desde ' + r : 'FALTA: agrega ' + r + ' como "Enviar como" en Gmail; mientras tanto saldrán desde ' + yo + ' con Responder a ' + r);
   enviarCorreo_({ to: yo, name: 'Control de asistencia', subject: 'Prueba de remitente', htmlBody: '<p>Prueba del remitente de la app de marcaje.</p>' });
   Logger.log('Correo de prueba enviado a ' + yo + '. Revisa el campo "De".');
 }
