@@ -70,9 +70,9 @@ function olvidarMemoria_() { _cfg = null; _emps = null; _lugs = null; }
 // Revisa/crea las hojas solo una vez cada 6 horas (no en cada petición)
 function setupUnaVez_() {
   const c = cache_();
-  if (c.get('SETUP_V6')) return;
+  if (c.get('SETUP_V7')) return;
   setup_();
-  c.put('SETUP_V6', '1', 21600);
+  c.put('SETUP_V7', '1', 21600);
 }
 
 function ss_() {
@@ -109,7 +109,7 @@ function setup_() {
   }
   // Horario de los recordatorios (se pueden cambiar en la hoja Config)
   const claves = cfg.getRange(1, 1, Math.max(cfg.getLastRow(), 1), 1).getDisplayValues().map(r => r[0]);
-  [['DIAS_LABORALES', '1,2,3,4,5'], ['AVISOS_ENTRADA', '08:00,08:15,08:30'], ['AVISOS_SALIDA', '17:00'], ['FERIADOS', ''], ['DOMINIO_MICROSOFT', 'amigosforchrist.org'], ['HORAS_DIA', '8']]
+  [['DIAS_LABORALES', '1,2,3,4,5'], ['AVISOS_ENTRADA', '08:00,08:15,08:30'], ['AVISOS_SALIDA', '17:00'], ['FERIADOS', ''], ['DOMINIO_MICROSOFT', 'amigosforchrist.org'], ['HORAS_DIA', '8'], ['CORREO_REMITENTE', 'dt@amigosforchrist.org']]
     .forEach(([k, v]) => { if (claves.indexOf(k) < 0) writeText_(cfg, cfg.getLastRow() + 1, [[k, v]]); });
   _cfg = null;
 }
@@ -371,7 +371,7 @@ function pedirCodigo(correo) {
   cc.put('C_' + c, JSON.stringify({ codigo: codigo, n: 0 }), 900);
   cc.put('E_' + c, '1', 60);
   const empresa = cfg_('EMPRESA') || 'Marcaje';
-  MailApp.sendEmail({
+  enviarCorreo_({
     to: c, name: empresa, subject: 'Tu código para la app de marcaje: ' + codigo,
     htmlBody: '<p>Hola ' + e.nombre + ',</p><p>Tu código para crear o cambiar tu contraseña es:</p>' +
       '<p style="font-size:28px;font-weight:bold;letter-spacing:4px">' + codigo + '</p>' +
@@ -624,7 +624,7 @@ function avisarPermiso_(e, p, o) {
       '</table>' +
       (url ? '<p style="margin:18px 0 4px"><a href="' + x(url) + '" style="background:#00758F;color:#FFFFFF;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:bold">' + x(o.boton || 'Abrir la app para aprobar') + '</a></p>' : '') +
       '</div><p style="font-size:12px;color:#6D6E71;padding:0 20px">Aviso automático del control de asistencia.</p></div>';
-    MailApp.sendEmail({
+    enviarCorreo_({
       to: para.join(','), name: 'Control de asistencia',
       subject: (o.asunto || 'Permiso pendiente: ') + e.nombre + ' (' + p.tipo + ', ' + fechas + ')',
       htmlBody: html
@@ -1133,6 +1133,44 @@ function activarRespaldoMensual(tok) {
 function obtenerEmpresa() { return cfg_('EMPRESA'); }
 
 /* Ejecuta esto una vez desde el editor: autoriza correos y Drive, y activa el respaldo mensual */
+/* ================= Envío de correos =================
+ * Los correos salen desde CORREO_REMITENTE (hoja Config, por defecto dt@amigosforchrist.org).
+ * Para eso esa dirección debe estar agregada como "Enviar como" (alias) en el Gmail de la cuenta dueña del script.
+ * Si todavía no lo está, el correo sale desde la cuenta dueña, con "Responder a" = CORREO_REMITENTE.
+ */
+function remitente_() { return correo_(cfg_('CORREO_REMITENTE')); }
+function aliasDisponible_(r) {
+  if (!r) return false;
+  const k = 'ALIAS_' + r, cc = cache_(), v = cc.get(k);
+  if (v) return v === '1';
+  let ok = false;
+  try { ok = GmailApp.getAliases().map(correo_).indexOf(r) >= 0; } catch (e) { console.error('No se pudieron leer los alias de Gmail: ' + e); }
+  cc.put(k, ok ? '1' : '0', 3600);
+  return ok;
+}
+function enviarCorreo_(m) {
+  const r = remitente_();
+  if (r && aliasDisponible_(r)) {
+    GmailApp.sendEmail(m.to, m.subject, 'Abre este correo en un programa que muestre HTML.', { htmlBody: m.htmlBody, name: m.name, from: r, replyTo: r });
+  } else {
+    if (r) console.warn('El correo salió desde la cuenta dueña: ' + r + ' no está configurado como "Enviar como" en Gmail.');
+    MailApp.sendEmail(r ? Object.assign({ replyTo: r }, m) : m);
+  }
+}
+// Ejecutar desde el editor para comprobar el remitente: muestra los alias y envía un correo de prueba a la cuenta dueña.
+function probarRemitente() {
+  setup_();
+  const r = remitente_(), yo = Session.getEffectiveUser().getEmail();
+  let alias = [];
+  try { alias = GmailApp.getAliases(); } catch (e) {}
+  cache_().remove('ALIAS_' + r);
+  Logger.log('Remitente configurado: ' + (r || '(ninguno)'));
+  Logger.log('Alias "Enviar como" de ' + yo + ': ' + (alias.length ? alias.join(', ') : '(ninguno)'));
+  Logger.log(aliasDisponible_(r) ? 'OK: los correos saldrán desde ' + r : 'FALTA: agrega ' + r + ' como "Enviar como" en Gmail; mientras tanto saldrán desde ' + yo + ' con Responder a ' + r);
+  enviarCorreo_({ to: yo, name: 'Control de asistencia', subject: 'Prueba de remitente', htmlBody: '<p>Prueba del remitente de la app de marcaje.</p>' });
+  Logger.log('Correo de prueba enviado a ' + yo + '. Revisa el campo "De".');
+}
+
 function autorizar() {
   setup_();
   activarRespaldo_();
