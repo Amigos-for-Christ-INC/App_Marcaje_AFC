@@ -72,9 +72,9 @@ function olvidarMemoria_() { _cfg = null; _emps = null; _lugs = null; }
 // Revisa/crea las hojas solo una vez cada 6 horas (no en cada petición)
 function setupUnaVez_() {
   const c = cache_();
-  if (c.get('SETUP_V8')) return;
+  if (c.get('SETUP_V9')) return;
   setup_();
-  c.put('SETUP_V8', '1', 21600);
+  c.put('SETUP_V9', '1', 21600);
 }
 
 function ss_() {
@@ -111,7 +111,7 @@ function setup_() {
   }
   // Horario de los recordatorios (se pueden cambiar en la hoja Config)
   const claves = cfg.getRange(1, 1, Math.max(cfg.getLastRow(), 1), 1).getDisplayValues().map(r => r[0]);
-  [['DIAS_LABORALES', '1,2,3,4,5'], ['AVISOS_ENTRADA', '08:00,08:15,08:30'], ['AVISOS_SALIDA', '17:00'], ['FERIADOS', ''], ['DOMINIO_MICROSOFT', 'amigosforchrist.org'], ['HORAS_DIA', '8'], ['CORREO_REMITENTE', 'dt@amigosforchrist.org']]
+  [['DIAS_LABORALES', '1,2,3,4,5'], ['AVISOS_ENTRADA', '08:00,08:15,08:30'], ['AVISOS_SALIDA', '17:00'], ['FERIADOS', ''], ['DOMINIO_MICROSOFT', 'amigosforchrist.org'], ['HORAS_DIA', '8'], ['CORREO_REMITENTE', 'dt@amigosforchrist.org'], ['PREFIJO_CORREO', '[Marcaje]']]
     .forEach(([k, v]) => { if (claves.indexOf(k) < 0) writeText_(cfg, cfg.getLastRow() + 1, [[k, v]]); });
   _cfg = null;
 }
@@ -1488,7 +1488,8 @@ function regresoMicrosoftCorreo_(q) {
 function enviarGraph_(r, m) {
   const para = String(m.to).split(/[,;\s]+/).filter(Boolean).map(a => ({ emailAddress: { address: a } }));
   const p = props_(), delegado = !!p.getProperty('GRAPH_REFRESH'), cuenta = correo_(p.getProperty('GRAPH_CUENTA') || '');
-  const msg = { subject: m.subject, body: { contentType: 'HTML', content: m.htmlBody }, toRecipients: para };
+  const msg = { subject: m.subject, body: { contentType: 'HTML', content: m.htmlBody }, toRecipients: para,
+    internetMessageHeaders: [{ name: 'X-AFC-App', value: 'Marcaje' }] };   // encabezado para reglas de correo
   if (delegado && cuenta && cuenta !== r) msg.from = { emailAddress: { address: r } };   // "Enviar como" dt@ desde otra cuenta
   const url = delegado ? 'https://graph.microsoft.com/v1.0/me/sendMail' : 'https://graph.microsoft.com/v1.0/users/' + encodeURIComponent(r) + '/sendMail';
   const res = UrlFetchApp.fetch(url, {
@@ -1507,6 +1508,9 @@ function enviarGraph_(r, m) {
 function cupoCorreo_() { return graphConfigurado_() ? 10000 : MailApp.getRemainingDailyQuota(); }
 
 function enviarCorreo_(m) {
+  // Todos los asuntos empiezan con el prefijo de la app (Config: PREFIJO_CORREO), para ordenarlos con reglas de Outlook
+  const pre = String(cfg_('PREFIJO_CORREO') || '').trim();
+  if (pre && String(m.subject).indexOf(pre) !== 0) m = Object.assign({}, m, { subject: pre + ' ' + m.subject });
   const r = remitente_();
   if (r && graphConfigurado_()) {
     try { enviarGraph_(r, m); return; }
