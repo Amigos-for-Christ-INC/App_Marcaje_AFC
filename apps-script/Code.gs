@@ -375,9 +375,10 @@ function pedirCodigo(correo) {
   const empresa = cfg_('EMPRESA') || 'Marcaje';
   enviarCorreo_({
     to: c, name: empresa, subject: 'Tu código para la app de marcaje: ' + codigo,
-    htmlBody: '<p>Hola ' + e.nombre + ',</p><p>Tu código para crear o cambiar tu contraseña es:</p>' +
-      '<p style="font-size:28px;font-weight:bold;letter-spacing:4px">' + codigo + '</p>' +
-      '<p>Vence en 15 minutos. Si no lo pediste, ignora este correo.</p><p>' + empresa + '</p>'
+    htmlBody: plantillaCorreo_({ titulo: 'Tu código de acceso', estado: { texto: 'Código de seguridad', color: '#0A2240' },
+      intro: 'Hola ' + e.nombre + ', usa este código en la App de Marcaje para crear o cambiar tu contraseña:',
+      bloque: '<div style="margin:18px 0 4px;padding:18px;background:#F5EDEC;border-radius:10px;text-align:center;font-size:34px;font-weight:bold;letter-spacing:10px;color:#0A2240;font-family:Consolas,monospace">' + codigo + '</div>',
+      nota: 'Vence en 15 minutos. Si no lo pediste, ignora este correo: tu cuenta sigue segura.' })
   });
   return 'Te enviamos un código a ' + c + '. Revisa también la carpeta de spam.';
 }
@@ -579,18 +580,29 @@ function solicitarPermiso(token, p) {
   });
   // Si el correo o la notificación fallan, la solicitud igual queda guardada
   if (lider) {
-    avisarPermiso_(e, p, { para: [lider.correo], titulo: 'Un colaborador de tu equipo pidió permiso',
-      asunto: 'Permiso por aprobar (líder): ', boton: 'Abrir la app para aprobar', link: '#equipo' });
+    avisarPermiso_(e, p, { para: [lider.correo], titulo: e.nombre + ' pidió un permiso', conHoras: true,
+      intro: 'Como su líder, usted lo revisa primero. Después pasa a Administración para la aprobación final.',
+      estado: { texto: 'Espera su aprobación', color: '#00758F' },
+      asunto: 'Permiso por aprobar (líder): ', boton: 'Aprobar en la App de Marcaje', link: '#equipo' });
     pushA_([lider.correo], 'Permiso por aprobar', e.nombre + ' pidió ' + p.tipo.toLowerCase() + ' (' + rangoTxt_(p) + ').', 'permiso', '#equipo');
-    avisarPermiso_(e, p, { titulo: 'Nueva solicitud de permiso (primero la revisa el líder)', asunto: 'Permiso solicitado (espera al líder): ',
+    avisarPermiso_(e, p, { titulo: 'Nueva solicitud de permiso', asunto: 'Permiso solicitado (espera al líder): ',
+      intro: 'Primero la revisa el líder del colaborador. Le avisaremos cuando esté lista para su aprobación final.',
+      estado: { texto: 'En revisión del líder', color: '#6D6E71' },
       filasExtra: [['Líder', lider.nombre]], boton: 'Abrir la app' });
     return 'Solicitud enviada. Primero la revisa tu líder (' + lider.nombre + ') y luego Administración.';
   }
-  avisarPermiso_(e, p);
+  avisarPermiso_(e, p, { conHoras: true, intro: 'Este colaborador no tiene líder asignado, así que la solicitud llega directo a Administración.' });
   pushA_(correosAviso_(), 'Permiso por aprobar', e.nombre + ' pidió ' + p.tipo.toLowerCase() + ' (' + rangoTxt_(p) + ').', 'permiso');
   return 'Solicitud enviada. Queda pendiente de aprobación.';
 }
 
+// 2026-11-10 -> "martes 10 de noviembre de 2026"
+function fechaTexto_(f) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(f))) return String(f || '');
+  const d = new Date(fUTC_(f)), dias = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+  const meses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  return dias[d.getUTCDay()] + ' ' + d.getUTCDate() + ' de ' + meses[d.getUTCMonth()] + ' de ' + d.getUTCFullYear();
+}
 function rangoTxt_(p) {
   const h = p.hasta || p.desde;
   return (!h || h === p.desde) ? p.desde : p.desde + ' al ' + h;
@@ -603,6 +615,59 @@ function correosAviso_() {
 
 // o (opcional): { para, titulo, asunto, filasExtra: [[k, v]], boton, link }
 // Sin "para" se envía a la lista AVISO_PERMISOS (Administración).
+// Enlace de la app instalable (Config: URL_APP)
+function urlApp_() {
+  let u = (cfg_('URL_APP') || 'https://amigos-for-christ-inc.github.io/App_Marcaje_AFC/').replace(/#.*$/, '');
+  if (!/\/$/.test(u)) u += '/';
+  return u;
+}
+
+// Diseño único de los correos de la App de Marcaje (tablas y estilos en línea: se ve bien en Outlook, Gmail y celular)
+// d: { titulo, intro, estado: {texto, color}, filas: [[etiqueta, valor]], horas, boton, url, bloque (HTML propio), nota }
+function plantillaCorreo_(d) {
+  const x = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const base = urlApp_(), F = 'Raleway,Segoe UI,Arial,sans-serif';
+  const filas = (d.filas || []).filter(f => f[1] !== '' && f[1] != null).map((f, i) =>
+    '<tr><td style="padding:10px 12px 10px 0;border-top:' + (i ? '1px solid #EDE8E7' : '0') + ';color:#6D6E71;font-size:13px;width:38%;vertical-align:top;font-family:' + F + '">' + x(f[0]) + '</td>' +
+    '<td style="padding:10px 0;border-top:' + (i ? '1px solid #EDE8E7' : '0') + ';color:#0A2240;font-size:15px;font-weight:bold;vertical-align:top;font-family:' + F + '">' + x(f[1]) + '</td></tr>').join('');
+  let horas = '';
+  if (d.horas && d.horas.semana) {
+    const h = d.horas, ok = h.semana.cumple, col = ok ? '#1E7B45' : '#B3261E';
+    const n = v => String(Math.round((Number(v) || 0) * 10) / 10);
+    horas = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:18px 0 0;background:#F5EDEC;border-radius:10px"><tr><td style="padding:14px 16px;font-family:' + F + '">' +
+      '<div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#6D6E71;font-weight:bold">Horas trabajadas</div>' +
+      '<div style="font-size:15px;color:#414042;margin-top:6px">Esta semana: <b>' + n(h.semana.trab) + ' de ' + n(h.semana.esp) + ' h</b></div>' +
+      '<div style="font-size:15px;color:#414042;margin-top:2px">Este mes: <b>' + n(h.mes.trab) + ' de ' + n(h.mes.esp) + ' h</b></div>' +
+      '<div style="font-size:15px;font-weight:bold;color:' + col + ';margin-top:6px">' + (ok ? '✓ Cumple sus horas de la semana' : 'Le faltan ' + n(h.semana.debe) + ' h esta semana') + '</div>' +
+      '</td></tr></table>';
+  }
+  const estado = d.estado ? '<span style="display:inline-block;background:' + d.estado.color + ';color:#FFFFFF;font-size:12px;font-weight:bold;letter-spacing:.5px;padding:5px 12px;border-radius:20px;font-family:' + F + '">' + x(d.estado.texto) + '</span>' : '';
+  const boton = d.url ? '<table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0 4px"><tr><td style="background:#00758F;border-radius:8px">' +
+    '<a href="' + x(d.url) + '" style="display:inline-block;padding:13px 26px;font-family:' + F + ';font-size:15px;font-weight:bold;color:#FFFFFF;text-decoration:none">' + x(d.boton || 'Abrir la App de Marcaje') + ' &rarr;</a></td></tr></table>' : '';
+  return '<!doctype html><html><body style="margin:0;padding:0;background:#F5EDEC">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F5EDEC"><tr><td align="center" style="padding:24px 12px">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#FFFFFF;border-radius:14px;overflow:hidden;font-family:' + F + '">' +
+    '<tr><td style="background:#0A2240;padding:22px 28px">' +
+      '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>' +
+      '<td style="vertical-align:middle"><img src="' + base + 'icons/logo-correo.png" width="150" alt="Amigos for Christ" style="display:block;border:0;width:150px;height:auto;color:#FFFFFF;font-size:18px;font-weight:bold;font-family:' + F + '"></td>' +
+      '<td align="right" style="vertical-align:middle;font-family:' + F + '"><div style="color:#96D1DE;font-size:11px;font-weight:bold;letter-spacing:2px;text-transform:uppercase">App de Marcaje</div>' +
+      '<div style="color:#FFFFFF;font-size:13px;margin-top:3px">Control de asistencia</div></td>' +
+      '</tr></table></td></tr>' +
+    '<tr><td style="height:5px;background:#00758F;font-size:0;line-height:0">&nbsp;</td></tr>' +
+    '<tr><td style="padding:28px 28px 8px">' + estado +
+      '<h1 style="margin:14px 0 6px;font-family:' + F + ';font-size:22px;line-height:1.3;color:#0A2240">' + x(d.titulo) + '</h1>' +
+      (d.intro ? '<p style="margin:0 0 6px;font-family:' + F + ';font-size:15px;line-height:1.5;color:#414042">' + x(d.intro) + '</p>' : '') +
+      (d.bloque || '') +
+      (filas ? '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px">' + filas + '</table>' : '') +
+      horas + boton +
+      (d.nota ? '<p style="margin:14px 0 0;font-family:' + F + ';font-size:13px;line-height:1.5;color:#6D6E71">' + x(d.nota) + '</p>' : '') +
+    '</td></tr>' +
+    '<tr><td style="padding:20px 28px 26px"><div style="border-top:1px solid #EDE8E7;padding-top:16px;font-family:' + F + ';font-size:12px;line-height:1.6;color:#6D6E71">' +
+      'Aviso automático de la <b style="color:#0A2240">App de Marcaje AFC</b>. Para responder o aprobar, use la app.<br>' +
+      'Desarrollo Tecnológico · Amigos for Christ, Inc.</div></td></tr>' +
+    '</table></td></tr></table></body></html>';
+}
+
 function avisarPermiso_(e, p, o) {
   o = o || {};
   try {
@@ -611,21 +676,19 @@ function avisarPermiso_(e, p, o) {
     const x = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const fechas = rangoTxt_(p);
     const horas = p.horaDesde ? (p.horaDesde + (p.horaHasta ? ' a ' + p.horaHasta : '')) : 'Todo el día';
-    const fila = (k, v) => '<tr><td style="padding:6px 12px 6px 0;color:#6D6E71">' + x(k) + '</td><td style="padding:6px 0;color:#414042"><b>' + x(v) + '</b></td></tr>';
-    let url = cfg_('URL_APP');   // enlace de la app instalable (Config: URL_APP)
-    if (!url) { try { url = ScriptApp.getService().getUrl(); } catch (err) {} }
+    let url = urlApp_();
     if (url && o.link) url = url.replace(/#.*$/, '') + o.link;
-    const extra = (o.filasExtra || []).filter(f => f[1] !== '' && f[1] != null).map(f => fila(f[0], f[1])).join('');
-    const html =
-      '<div style="font-family:Raleway,Arial,sans-serif;max-width:520px">' +
-      '<div style="background:#0A2240;color:#FFFFFF;padding:16px 20px;font-size:18px;font-weight:bold">' + x(o.titulo || 'Nueva solicitud de permiso') + '</div>' +
-      '<div style="padding:16px 20px;background:#FFFFFF;border:1px solid #E3E0E7">' +
-      '<table style="border-collapse:collapse;font-size:15px">' +
-      fila('Empleado', e.nombre) + fila('Correo', e.correo) + fila('Lugar', e.lugar) + fila('Tipo', p.tipo) +
-      fila('Fecha', fechas) + fila('Horario', horas) + fila('Motivo', String(p.motivo || '').trim()) + extra +
-      '</table>' +
-      (url ? '<p style="margin:18px 0 4px"><a href="' + x(url) + '" style="background:#00758F;color:#FFFFFF;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:bold">' + x(o.boton || 'Abrir la app para aprobar') + '</a></p>' : '') +
-      '</div><p style="font-size:12px;color:#6D6E71;padding:0 20px">Aviso automático del control de asistencia.</p></div>';
+    let horasEmp = null;
+    if (o.conHoras && e.correo) { try { horasEmp = horasDe_([correo_(e.correo)]).porCorreo[correo_(e.correo)]; } catch (err) {} }
+    const filas = [['Colaborador', e.nombre], ['Correo', e.correo], ['Lugar de trabajo', e.lugar], ['Tipo de permiso', p.tipo],
+      ['Fecha', (!p.hasta || p.hasta === p.desde) ? fechaTexto_(p.desde) : 'Del ' + fechaTexto_(p.desde) + ' al ' + fechaTexto_(p.hasta)], ['Horario', horas], ['Motivo', String(p.motivo || '').trim()]].concat(o.filasExtra || []);
+    const html = plantillaCorreo_({
+      titulo: o.titulo || 'Nueva solicitud de permiso',
+      intro: o.intro || '',
+      estado: o.estado || { texto: 'Pendiente de aprobación', color: '#00758F' },
+      filas: filas, horas: horasEmp,
+      boton: o.boton || 'Abrir la App de Marcaje', url: url
+    });
     enviarCorreo_({
       to: para.join(','), name: 'Control de asistencia',
       subject: (o.asunto || 'Permiso pendiente: ') + e.nombre + ' (' + p.tipo + ', ' + fechas + ')',
@@ -847,13 +910,16 @@ function responderPermisoLider(token, id, decision, nota, reponerFecha, reponerH
   const rep = reponerFecha ? 'Reponer el ' + reponerFecha + ' (' + horasR + ' h)' : '';
   if (decision === 'Aprobado') {
     pushA_([res.correo], 'Tu líder aprobó tu permiso', 'Ahora falta la aprobación de Administración.' + (rep ? ' ' + rep + '.' : ''), 'permiso');
-    avisarPermiso_(emp, res, { titulo: 'Permiso aprobado por el líder: falta la aprobación final', asunto: 'Aprobado por el líder, falta Administración: ',
-      filasExtra: [['Aprobado por', yo.nombre + ' (líder)'], ['Nota del líder', nota], ['Reposición', rep]] });
+    avisarPermiso_(emp, res, { titulo: 'Listo para su aprobación final', asunto: 'Aprobado por el líder, falta Administración: ', conHoras: true,
+      intro: yo.nombre + ' (líder) aprobó esta solicitud. Falta la decisión de Administración.',
+      estado: { texto: 'Aprobado por el líder', color: '#1E7B45' }, boton: 'Abrir la App de Marcaje para decidir',
+      filasExtra: [['Aprobado por', yo.nombre + ' (líder)'], ['Nota del líder', nota], ['Reposición', reponerFecha ? fechaTexto_(reponerFecha) + ' (' + horasR + ' h)' : '']] });
     pushA_(correosAviso_(), 'Permiso listo para aprobación final', emp.nombre + ': aprobado por su líder ' + yo.nombre + '.', 'permiso');
     return 'Aprobado. Pasó a Administración para la aprobación final.' + (rep ? ' ' + rep + '.' : '');
   }
   pushA_([res.correo], 'Tu líder rechazó tu permiso', nota || 'Abre la app para ver el detalle.', 'permiso');
-  avisarPermiso_(emp, res, { titulo: 'Permiso rechazado por el líder', asunto: 'Rechazado por el líder: ',
+  avisarPermiso_(emp, res, { titulo: 'El líder rechazó esta solicitud', asunto: 'Rechazado por el líder: ',
+    intro: 'La solicitud quedó cerrada. Este aviso es solo informativo.', estado: { texto: 'Rechazado por el líder', color: '#B3261E' },
     filasExtra: [['Rechazado por', yo.nombre + ' (líder)'], ['Motivo', nota]], boton: 'Abrir la app' });
   return 'Permiso rechazado.';
 }
