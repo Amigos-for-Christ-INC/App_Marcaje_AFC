@@ -675,6 +675,29 @@ function probarAviso(tok) {
   return 'Correo de prueba enviado a ' + para.join(', ') + '.';
 }
 
+// Ejecutar desde el editor si un aviso de permiso no llega. Muestra a quién se envió el último permiso y envía una copia de prueba.
+function diagnosticoCorreo() {
+  setup_();
+  const yo = Session.getEffectiveUser().getEmail();
+  Logger.log('Cuenta que ejecuta: ' + yo + ' | Remitente (Config CORREO_REMITENTE): ' + (remitente_() || '(vacío)'));
+  Logger.log('Correos que quedan hoy: ' + MailApp.getRemainingDailyQuota());
+  const adm = correosAviso_();
+  Logger.log('AVISO_PERMISOS (Administración): ' + (adm.length ? adm.join(', ') : '(VACÍO: Administración no recibe correos)'));
+  const filas = rows_(H.PER).filter(r => r[0]);
+  if (!filas.length) { Logger.log('No hay permisos en la hoja.'); return; }
+  const p = permisoObj_(filas[filas.length - 1]);
+  const emp = empPorCorreo_(p.correo) || { nombre: p.nombre, correo: p.correo, lugar: '' };
+  const lider = emp.correo ? liderDe_(emp) : null;
+  Logger.log('Último permiso: ' + p.nombre + ' (' + p.correo + '), ' + p.tipo + ' ' + p.desde + ', estado: ' + p.estado + ', solicitado: ' + p.solicitado);
+  Logger.log('Líder de esa persona: ' + (lider ? lider.nombre + ' <' + lider.correo + '>' : '(sin líder: el aviso va solo a AVISO_PERMISOS)'));
+  const para = (lider ? [lider.correo] : []).concat(adm);
+  if (!para.length) { Logger.log('No hay a quién enviar. Agrega correos en AVISO_PERMISOS o asigna un líder.'); return; }
+  // Envío directo, sin ocultar errores
+  enviarCorreo_({ to: para.join(','), name: 'Control de asistencia', subject: 'Prueba de aviso de permiso (' + p.nombre + ')',
+    htmlBody: '<p>Prueba del aviso de permisos enviada por ' + yo + '.</p>' });
+  Logger.log('Enviado sin errores a: ' + para.join(', ') + '. Si no llega, revisa Correo no deseado y la Cuarentena de Microsoft 365.');
+}
+
 function misPermisos(token) {
   const e = sesionEmp_(token);
   return rows_(H.PER).filter(r => correo_(r[2]) === e.correo).slice(-25).reverse().map(permisoObj_);
