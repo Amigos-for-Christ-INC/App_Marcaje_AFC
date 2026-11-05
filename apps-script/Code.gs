@@ -366,7 +366,7 @@ function pedirCodigo(correo) {
   if (e.activo === 'NO') throw new Error('Tu usuario está inactivo. Habla con administración.');
   const cc = cache_();
   if (cc.get('E_' + c)) throw new Error('Ya te enviamos un código hace menos de un minuto. Revisa tu correo (y la carpeta de spam).');
-  if (MailApp.getRemainingDailyQuota() < 1) throw new Error('Hoy ya no se pueden enviar más correos. Pide a administración una contraseña temporal.');
+  if (cupoCorreo_() < 1) throw new Error('Hoy ya no se pueden enviar más correos. Pide a administración una contraseña temporal.');
   const codigo = String(Math.floor(100000 + Math.random() * 900000));
   cc.put('C_' + c, JSON.stringify({ codigo: codigo, n: 0 }), 900);
   cc.put('E_' + c, '1', 60);
@@ -605,7 +605,7 @@ function avisarPermiso_(e, p, o) {
   o = o || {};
   try {
     const para = (o.para || correosAviso_()).filter(c => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(c));
-    if (!para.length || MailApp.getRemainingDailyQuota() < para.length) return;
+    if (!para.length || cupoCorreo_() < para.length) return;
     const x = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const fechas = rangoTxt_(p);
     const horas = p.horaDesde ? (p.horaDesde + (p.horaHasta ? ' a ' + p.horaHasta : '')) : 'Todo el día';
@@ -680,7 +680,7 @@ function diagnosticoCorreo() {
   setup_();
   const yo = Session.getEffectiveUser().getEmail();
   Logger.log('Cuenta que ejecuta: ' + yo + ' | Remitente (Config CORREO_REMITENTE): ' + (remitente_() || '(vacío)'));
-  Logger.log('Correos que quedan hoy: ' + MailApp.getRemainingDailyQuota());
+  Logger.log('Envío por: ' + (graphConfigurado_() ? 'Microsoft 365 (Graph)' : 'Google') + ' | Correos que quedan hoy (Google): ' + MailApp.getRemainingDailyQuota());
   const adm = correosAviso_();
   Logger.log('AVISO_PERMISOS (Administración): ' + (adm.length ? adm.join(', ') : '(VACÍO: Administración no recibe correos)'));
   const filas = rows_(H.PER).filter(r => r[0]);
@@ -1171,8 +1171,50 @@ function aliasDisponible_(r) {
   cc.put(k, ok ? '1' : '0', 3600);
   return ok;
 }
+/* --- Envío por Microsoft 365 (Graph), desde el buzón CORREO_REMITENTE ---
+ * Propiedades del script: GRAPH_CLIENT_ID y GRAPH_SECRET (la app de Entra) y, opcional, GRAPH_TENANT.
+ * La app de Entra NO lleva Mail.Send en "Permisos de API": el permiso se da en Exchange (RBAC para aplicaciones)
+ * limitado al buzón del remitente, para que no pueda enviar como nadie más.
+ */
+const TENANT_AFC = '3df804dd-19d4-414d-aea4-d693b7b73b45';
+function graphConfigurado_() { const p = props_(); return !!(p.getProperty('GRAPH_CLIENT_ID') && p.getProperty('GRAPH_SECRET')); }
+function tokenGraph_() {
+  const cc = cache_(), t = cc.get('GRAPH_TOKEN');
+  if (t) return t;
+  const p = props_(), tenant = p.getProperty('GRAPH_TENANT') || TENANT_AFC;
+  const res = UrlFetchApp.fetch('https://login.microsoftonline.com/' + tenant + '/oauth2/v2.0/token', {
+    method: 'post', muteHttpExceptions: true,
+    payload: { client_id: p.getProperty('GRAPH_CLIENT_ID'), client_secret: p.getProperty('GRAPH_SECRET'),
+      scope: 'https://graph.microsoft.com/.default', grant_type: 'client_credentials' }
+  });
+  const j = JSON.parse(res.getContentText() || '{}');
+  if (!j.access_token) throw new Error('Microsoft no dio el token (' + res.getResponseCode() + '): ' + (j.error_description || j.error || '').split('\n')[0]);
+  cc.put('GRAPH_TOKEN', j.access_token, Math.max(60, Math.min(3000, (Number(j.expires_in) || 3600) - 300)));
+  return j.access_token;
+}
+function enviarGraph_(r, m) {
+  const para = String(m.to).split(/[,;\s]+/).filter(Boolean).map(a => ({ emailAddress: { address: a } }));
+  const res = UrlFetchApp.fetch('https://graph.microsoft.com/v1.0/users/' + encodeURIComponent(r) + '/sendMail', {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { Authorization: 'Bearer ' + tokenGraph_() },
+    payload: JSON.stringify({ message: { subject: m.subject, body: { contentType: 'HTML', content: m.htmlBody }, toRecipients: para }, saveToSentItems: true })
+  });
+  const code = res.getResponseCode();
+  if (code === 401) cache_().remove('GRAPH_TOKEN');
+  if (code !== 202) {
+    let msg = ''; try { msg = (JSON.parse(res.getContentText()).error || {}).message || ''; } catch (e) {}
+    throw new Error('Microsoft 365 no envió el correo (' + code + '): ' + msg);
+  }
+}
+// Cupo de correos: por Microsoft 365 el límite es el de Exchange, no el de Google
+function cupoCorreo_() { return graphConfigurado_() ? 10000 : MailApp.getRemainingDailyQuota(); }
+
 function enviarCorreo_(m) {
   const r = remitente_();
+  if (r && graphConfigurado_()) {
+    try { enviarGraph_(r, m); return; }
+    catch (e) { console.error('Envío por Microsoft 365 falló, se usa Google: ' + e.message); }
+  }
   let yo = '';
   try { yo = correo_(Session.getEffectiveUser().getEmail()); } catch (e) {}
   if (r && r === yo) { MailApp.sendEmail(m); return; }   // la cuenta dueña ya es el remitente
@@ -1191,6 +1233,11 @@ function probarRemitente() {
   try { alias = GmailApp.getAliases(); } catch (e) {}
   cache_().remove('ALIAS_' + r);
   Logger.log('Remitente configurado: ' + (r || '(ninguno)'));
+  if (graphConfigurado_()) {
+    try { cache_().remove('GRAPH_TOKEN'); enviarGraph_(r, { to: yo, subject: 'Prueba de remitente (Microsoft 365)', htmlBody: '<p>Prueba enviada por Microsoft 365 desde ' + r + '.</p>' });
+      Logger.log('OK: Microsoft 365 envió el correo de prueba desde ' + r + ' a ' + yo + '. Así saldrán todos los correos.'); return; }
+    catch (e) { Logger.log('FALLA Microsoft 365: ' + e.message); }
+  } else Logger.log('Microsoft 365 no configurado (faltan GRAPH_CLIENT_ID y GRAPH_SECRET en las propiedades del script).');
   Logger.log('Alias "Enviar como" de ' + yo + ': ' + (alias.length ? alias.join(', ') : '(ninguno)'));
   Logger.log(r === correo_(yo) || aliasDisponible_(r) ? 'OK: los correos saldrán desde ' + r : 'FALTA: agrega ' + r + ' como "Enviar como" en Gmail; mientras tanto saldrán desde ' + yo + ' con Responder a ' + r);
   enviarCorreo_({ to: yo, name: 'Control de asistencia', subject: 'Prueba de remitente', htmlBody: '<p>Prueba del remitente de la app de marcaje.</p>' });
