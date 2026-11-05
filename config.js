@@ -1,7 +1,7 @@
 // Configuración de la app. Estos datos son públicos (no son contraseñas).
 
 // Dirección del servidor de Apps Script (termina en /exec)
-self.API_URL = 'https://script.google.com/macros/s/AKfycbyWAZJYh5y4y4mfEGjy663wVpd33pAcpj_vSr4C27DDfmazERD9qwzID6JdWgxHd1Sz/exec';
+self.API_URL = 'https://script.google.com/macros/s/AKfycbyJUuwkbhTXz-vnFaIMnzZpiLM47KFOcBOEFqNC_wrTnT3hxKyRWtXDoLgX5344pItA/exec';
 
 // Firebase, para los recordatorios por notificación. Se copian de la consola de Firebase:
 // Configuración del proyecto > General > Tus apps > Configuración del SDK.
