@@ -918,6 +918,7 @@ function responderPermisoLider(token, id, decision, nota, reponerFecha, reponerH
     return 'Aprobado. Pasó a Administración para la aprobación final.' + (rep ? ' ' + rep + '.' : '');
   }
   pushA_([res.correo], 'Tu líder rechazó tu permiso', nota || 'Abre la app para ver el detalle.', 'permiso');
+  confirmarPermiso_(emp, res, 'Rechazado', yo.nombre, nota, true);
   avisarPermiso_(emp, res, { titulo: 'El líder rechazó esta solicitud', asunto: 'Rechazado por el líder: ',
     intro: 'La solicitud quedó cerrada. Este aviso es solo informativo.', estado: { texto: 'Rechazado por el líder', color: '#B3261E' },
     filasExtra: [['Rechazado por', yo.nombre + ' (líder)'], ['Motivo', nota]], boton: 'Abrir la app' });
@@ -1007,7 +1008,39 @@ function responderPermiso(tok, id, estado, respuesta) {
   const p = r.p, rep = p.reponerFecha ? ' Reponer el ' + p.reponerFecha + ' (' + p.reponerHoras + ' h).' : '';
   pushA_([p.correo], 'Tu permiso fue ' + estado.toLowerCase(), (respuesta ? String(respuesta).slice(0, 120) : rangoTxt_(p)) + (estado === 'Aprobado' ? rep : ''), 'permiso');
   if (p.lider) pushA_([p.lider], 'Permiso ' + estado.toLowerCase() + ' por Administración', p.nombre + ' (' + rangoTxt_(p) + ').' + (estado === 'Aprobado' ? rep : ''), 'permiso', '#equipo');
-  return 'Permiso ' + estado.toLowerCase();
+  // Correo de confirmación al colaborador (con copia a su líder)
+  confirmarPermiso_(r.emp, p, estado, a.nombre, respuesta);
+  return 'Permiso ' + estado.toLowerCase() + '. Se envió la confirmación por correo a ' + p.nombre + '.';
+}
+
+// Correo al colaborador con la decisión (final, o rechazo del líder). Nunca detiene el proceso.
+function confirmarPermiso_(emp, p, estado, quien, respuesta, esLider) {
+  try {
+    const para = [correo_(p.correo)];
+    if (!esLider && p.lider && correo_(p.lider) !== correo_(p.correo)) para.push(correo_(p.lider));
+    const ok = estado === 'Aprobado';
+    const fecha = (!p.hasta || p.hasta === p.desde) ? fechaTexto_(p.desde) : 'Del ' + fechaTexto_(p.desde) + ' al ' + fechaTexto_(p.hasta);
+    const horario = p.horaDesde ? (p.horaDesde + (p.horaHasta ? ' a ' + p.horaHasta : '')) : 'Todo el día';
+    const filas = [['Tipo de permiso', p.tipo], ['Fecha', fecha], ['Horario', horario], ['Motivo', String(p.motivo || '').trim()]];
+    if (p.revisadoLiderPor && !esLider) filas.push(['Aprobado por su líder', p.revisadoLiderPor + (p.respuestaLider ? ' — ' + p.respuestaLider : '')]);
+    if (ok && p.reponerFecha) filas.push(['Reposición', fechaTexto_(p.reponerFecha) + ' (' + p.reponerHoras + ' h)']);
+    filas.push([esLider ? 'Rechazado por' : (ok ? 'Aprobado por' : 'Rechazado por'), quien + (esLider ? ' (líder)' : ' (Administración)')]);
+    if (respuesta) filas.push(['Comentario', String(respuesta).slice(0, 300)]);
+    enviarCorreo_({
+      to: para.join(','), name: 'App de Marcaje AFC',
+      subject: (ok ? 'Permiso aprobado: ' : 'Permiso rechazado: ') + p.tipo + ' (' + rangoTxt_(p) + ')',
+      htmlBody: plantillaCorreo_({
+        titulo: ok ? 'Su permiso fue aprobado' : 'Su permiso fue rechazado',
+        intro: 'Hola ' + (emp && emp.nombre || p.nombre) + ', ' + (ok
+          ? 'su solicitud tiene la aprobación final.' + (p.reponerFecha ? ' Recuerde marcar entrada y salida el día de la reposición.' : '')
+          : 'su solicitud no fue aprobada. Si tiene dudas, consulte con ' + (esLider ? 'su líder.' : 'Administración.')),
+        estado: ok ? { texto: 'Aprobado', color: '#1E7B45' } : { texto: 'Rechazado', color: '#B3261E' },
+        filas: filas, boton: 'Ver en la App de Marcaje', url: urlApp_()
+      })
+    });
+  } catch (err) {
+    console.error('No se pudo enviar la confirmación del permiso: ' + err);
+  }
 }
 
 function guardarEmpleado(tok, d) {
