@@ -1295,7 +1295,9 @@ async function refrescarPush(){
     const m = await prepararFirebase(); if (!m) return;
     const reg = await navigator.serviceWorker.ready;
     const t = await m.getToken({ vapidKey: window.VAPID_KEY, serviceWorkerRegistration: reg });
-    if (t && t !== leer('mk_push')) google.script.run.withSuccessHandler(() => { store('mk_push', t); pintarPush(); }).registrarDispositivo(S.token, t, plataforma());
+    // Se vuelve a registrar si cambió el identificador o cada 3 días, para que el servidor siempre tenga este teléfono
+    const ult = Number(leer('mk_push_sync') || 0), vencido = Date.now() - ult > 3 * 86400000;
+    if (t && (t !== leer('mk_push') || vencido)) google.script.run.withSuccessHandler(() => { store('mk_push', t); store('mk_push_sync', String(Date.now())); pintarPush(); }).registrarDispositivo(S.token, t, plataforma());
   } catch(e) {}
 }
 async function probarPush(){ toast(await call('probarNotificacion', S.token)); }
