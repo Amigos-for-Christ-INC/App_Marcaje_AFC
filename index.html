@@ -411,7 +411,9 @@ window.addEventListener('load', function(){
       <label for="eTemp">Contraseña temporal (opcional)</label>
       <input id="eTemp" type="text" autocomplete="off" placeholder="Solo si el empleado no puede recibir el código">
       <button onclick="guardarEmp()">Guardar empleado</button>
+      <button class="sec oculto" id="btnBienvenida" onclick="reenviarBienvenida()">Reenviar correo de bienvenida</button>
       <button class="sec" onclick="limpiarEmp()">Limpiar</button>
+      <p class="sub" style="margin-top:8px">Al agregar un empleado nuevo se le envía un correo con las indicaciones para entrar y usar la app.</p>
       <h2>Equipo <span class="sub" id="totalEmp"></span></h2>
       <input id="buscarEmp" placeholder="Buscar por nombre o correo" oninput="pintarEmps()">
       <ul class="lista" id="listaEmp" style="margin-top:10px"></ul>
@@ -597,7 +599,7 @@ function call(fn, ...args){
         let m = (e && e.message) || String(e);
         if (m.indexOf('SESION:') >= 0){
           m = m.split('SESION:')[1].trim();
-          if (S.adm && S.adm !== S.token && (fn.indexOf('admin') === 0 || ['responderPermiso','guardarEmpleado','guardarLugar','reporte','reporteADrive','estadoRespaldo','respaldarAhora','activarRespaldoMensual','guardarAvisos','probarAviso','cambiarPinAdmin'].includes(fn))){ S.adm=''; ver('vAdminLogin'); }
+          if (S.adm && S.adm !== S.token && (fn.indexOf('admin') === 0 || ['responderPermiso','guardarEmpleado','guardarLugar','reporte','reporteADrive','estadoRespaldo','respaldarAhora','activarRespaldoMensual','guardarAvisos','probarAviso','cambiarPinAdmin','enviarBienvenida'].includes(fn))){ S.adm=''; ver('vAdminLogin'); }
           else { S.token=''; store('mk_tok'); ver('vLogin'); }
         }
         toast(m, true); rej(e);
@@ -1118,12 +1120,18 @@ function editarEmp(i){
   pintarChecks(e.lugar);
   pintarLideres(e.lider);
   $('empFormTitulo').textContent = 'Editar empleado';
+  $('btnBienvenida').classList.toggle('oculto', e.activo === 'NO');
   $('aEmp').scrollIntoView();
 }
 function limpiarEmp(){
   S.empOriginal = '';
   ['eCorreo','eNombre','eCargo','eTemp'].forEach(id => $(id).value = '');
   $('eActivo').value = 'SI'; pintarChecks(); pintarRoles(); pintarLideres(); $('empFormTitulo').textContent = 'Agregar empleado';
+  $('btnBienvenida').classList.add('oculto');
+}
+async function reenviarBienvenida(){
+  if (!S.empOriginal) return;
+  toast(await call('enviarBienvenida', S.adm, S.empOriginal));
 }
 async function guardarEmp(){
   const lugar = [...document.querySelectorAll('#eLugares input:checked')].map(c => c.value).join(', ');

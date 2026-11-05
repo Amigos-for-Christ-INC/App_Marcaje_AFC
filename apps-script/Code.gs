@@ -10,7 +10,7 @@
  */
 
 const H = { EMP: 'Empleados', LUG: 'Lugares', MAR: 'Marcas', PER: 'Permisos', CFG: 'Config', DIS: 'Dispositivos' };
-const EMP_COLS = ['Correo', 'Nombre', 'Cargo', 'Lugar', 'Activo', 'Hash', 'Sal', 'DebeCambiar', 'Rol', 'Lider'];
+const EMP_COLS = ['Correo', 'Nombre', 'Cargo', 'Lugar', 'Activo', 'Hash', 'Sal', 'DebeCambiar', 'Rol', 'Lider', 'Bienvenida'];
 const MAR_COLS = ['ID', 'Fecha', 'Correo', 'Nombre', 'Entrada', 'Salida', 'Horas', 'LatEntrada', 'LngEntrada', 'MetrosEntrada', 'LatSalida', 'LngSalida', 'MetrosSalida', 'Lugar', 'Observacion', 'IdsCliente'];
 const PER_COLS = ['ID', 'Solicitado', 'Correo', 'Nombre', 'Tipo', 'Desde', 'Hasta', 'HoraDesde', 'HoraHasta', 'Motivo', 'Estado', 'Respuesta', 'Revisado', 'RevisadoPor',
   'Lider', 'RevisadoLider', 'RevisadoLiderPor', 'RespuestaLider', 'ReponerFecha', 'ReponerHoras'];
@@ -40,7 +40,7 @@ function doGet(e) {
 function apiPublica_() {
   return {
     obtenerEmpresa, login, loginMicrosoft, sesion, cerrarSesion, pedirCodigo, restablecerClave, cambiarClave,
-    marcar, sincronizarMarcas, misMarcas, solicitarPermiso, misPermisos, equipoLider, responderPermisoLider,
+    marcar, sincronizarMarcas, misMarcas, solicitarPermiso, misPermisos, equipoLider, responderPermisoLider, enviarBienvenida,
     adminLogin, adminResumen, responderPermiso, guardarEmpleado, guardarLugar, cambiarPinAdmin,
     reporte, reporteADrive, estadoRespaldo, respaldarAhora, activarRespaldoMensual,
     guardarAvisos, probarAviso,
@@ -72,9 +72,9 @@ function olvidarMemoria_() { _cfg = null; _emps = null; _lugs = null; }
 // Revisa/crea las hojas solo una vez cada 6 horas (no en cada petición)
 function setupUnaVez_() {
   const c = cache_();
-  if (c.get('SETUP_V7')) return;
+  if (c.get('SETUP_V8')) return;
   setup_();
-  c.put('SETUP_V7', '1', 21600);
+  c.put('SETUP_V8', '1', 21600);
 }
 
 function ss_() {
@@ -1087,7 +1087,7 @@ function guardarEmpleado(tok, d) {
     if (!l) throw new Error('El líder elegido no está registrado como empleado.');
     if (l.activo === 'NO') throw new Error('El líder elegido está inactivo.');
   }
-  return lock_(() => {
+  const res = lock_(() => {
     const sh = sh_(H.EMP);
     const ex = empPorCorreo_(d.original || correo);
     if (ex && a.rol === 'RRHH' && (ex.rol === 'Admin' || ex.rol === 'RRHH')) throw new Error('Solo un Admin puede modificar a este usuario.');
@@ -1102,6 +1102,89 @@ function guardarEmpleado(tok, d) {
     writeText_(sh, ex ? ex.row : sh.getLastRow() + 1, fila);
     return ex ? 'Empleado actualizado' : 'Empleado agregado';
   });
+  // Empleado nuevo y activo: correo de bienvenida con las indicaciones de la app
+  if (res === 'Empleado agregado' && d.activo !== 'NO') {
+    olvidarMemoria_();
+    const nuevo = empPorCorreo_(correo);
+    if (nuevo && bienvenida_(nuevo)) return 'Empleado agregado. Se le envió un correo de bienvenida a ' + correo + '.';
+  }
+  return res;
+}
+
+/* ================= Correo de bienvenida ================= */
+function bienvenida_(e) {
+  try {
+    const url = urlApp_(), F = 'Raleway,Segoe UI,Arial,sans-serif';
+    const lider = liderDe_(e);
+    const x = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const titulo = t => '<div style="margin:22px 0 8px;font-family:' + F + ';font-size:13px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;color:#00758F">' + t + '</div>';
+    const paso = (n, t, d) => '<tr><td style="vertical-align:top;padding:6px 12px 6px 0;width:30px"><div style="width:26px;height:26px;line-height:26px;border-radius:13px;background:#0A2240;color:#FFFFFF;text-align:center;font-family:' + F + ';font-size:13px;font-weight:bold">' + n + '</div></td>' +
+      '<td style="padding:6px 0;font-family:' + F + ';font-size:15px;line-height:1.5;color:#414042"><b style="color:#0A2240">' + t + '</b><br>' + d + '</td></tr>';
+    const punto = t => '<tr><td style="vertical-align:top;padding:4px 10px 4px 0;color:#00758F;font-size:16px;font-weight:bold">✓</td><td style="padding:4px 0;font-family:' + F + ';font-size:15px;line-height:1.5;color:#414042">' + t + '</td></tr>';
+    const libre = lugaresDe_(e.lugar) === LIBRE;
+    const bloque =
+      titulo('¿Para qué sirve?') +
+      '<table role="presentation" cellpadding="0" cellspacing="0">' +
+        punto('<b>Marcar su entrada y salida</b> desde el celular' + (libre ? '.' : ', estando en su lugar de trabajo (la app verifica la ubicación por GPS).')) +
+        punto('<b>Ver su historial</b> de marcas y horas trabajadas.') +
+        punto('<b>Pedir permisos</b> (citas, vacaciones, trámites) y ver si fueron aprobados.') +
+        punto('<b>Recibir recordatorios</b> si se le olvida marcar.') +
+        punto('Funciona aunque no haya señal: la marca se guarda y se envía al volver el internet.') +
+      '</table>' +
+      titulo('Cómo empezar') +
+      '<table role="presentation" cellpadding="0" cellspacing="0">' +
+        paso(1, 'Abra la app en su celular', 'Use el botón de abajo o este enlace: <a href="' + x(url) + '" style="color:#00758F">' + x(url.replace(/^https:\/\//, '')) + '</a>') +
+        paso(2, 'Entre con su cuenta de Microsoft', 'Toque <b>"Entrar con Microsoft"</b> y use su correo de trabajo <b>' + x(e.correo) + '</b> con la misma contraseña de su Outlook.') +
+        paso(3, 'Instálela como app', '<b>Android (Chrome):</b> menú ⋮ → <i>Instalar app</i> o <i>Agregar a pantalla principal</i>.<br><b>iPhone (Safari):</b> botón Compartir → <i>Agregar a inicio</i>.') +
+        paso(4, 'Permita la ubicación y los recordatorios', 'Cuando la app lo pida, toque <b>Permitir</b> la ubicación. En la pestaña <b>Cuenta</b> active los recordatorios.') +
+        paso(5, 'Marque su entrada', 'En la pestaña <b>Marcar</b>, toque el botón grande al llegar y al salir.') +
+      '</table>';
+    const filas = [['Su correo', e.correo], ['Lugar de trabajo', libre ? 'Libre (puede marcar desde cualquier lugar)' : e.lugar], ['Cargo', e.cargo], ['Su líder', lider ? lider.nombre : '']];
+    enviarCorreo_({
+      to: e.correo, name: 'App de Marcaje AFC',
+      subject: 'Bienvenido a la App de Marcaje de Amigos for Christ',
+      htmlBody: plantillaCorreo_({
+        titulo: 'Bienvenido, ' + String(e.nombre).split(' ')[0],
+        estado: { texto: 'Nuevo usuario', color: '#00758F' },
+        intro: 'Ya tiene acceso a la App de Marcaje de Amigos for Christ, donde registrará su asistencia y pedirá sus permisos. Aquí le explicamos cómo empezar.',
+        filas: filas, bloque: bloque, boton: 'Abrir la App de Marcaje', url: url,
+        nota: '¿Dudas o problemas para entrar? Consulte con ' + (lider ? 'su líder (' + lider.nombre + ') o con ' : '') + 'Administración.'
+      })
+    });
+    // Marca la fecha de envío (columna Bienvenida)
+    const sh = sh_(H.EMP), col = EMP_COLS.indexOf('Bienvenida') + 1;
+    if (e.row && col > 0) writeText_(sh, e.row, [[ahora_()]], col);
+    return true;
+  } catch (err) {
+    console.error('No se pudo enviar la bienvenida a ' + e.correo + ': ' + err);
+    return false;
+  }
+}
+
+// Botón "Reenviar bienvenida" del panel de Empleados
+function enviarBienvenida(tok, correo) {
+  actor_(tok, ['Admin', 'RRHH']);
+  const e = empPorCorreo_(correo_(correo));
+  if (!e) throw new Error('No se encontró ese empleado.');
+  if (e.activo === 'NO') throw new Error('El empleado está inactivo.');
+  if (!bienvenida_(e)) throw new Error('No se pudo enviar el correo. Revisa diagnosticoCorreo.');
+  return 'Correo de bienvenida enviado a ' + e.correo + '.';
+}
+
+// Ejecutar desde el editor: envía la bienvenida a los empleados activos que nunca la recibieron
+// (por ejemplo, los que se cargaron pegándolos en la hoja). Hasta 150 por ejecución.
+function enviarBienvenidaPendientes() {
+  setup_(); olvidarMemoria_();
+  const col = EMP_COLS.indexOf('Bienvenida');
+  const sh = sh_(H.EMP), v = sh.getDataRange().getDisplayValues();
+  let n = 0, faltan = 0;
+  for (let i = 1; i < v.length; i++) {
+    if (!v[i][0] || String(v[i][4]).toUpperCase() === 'NO' || v[i][col]) continue;
+    if (n >= 150) { faltan++; continue; }
+    const e = empPorCorreo_(correo_(v[i][0]));
+    if (e && bienvenida_(e)) n++;
+  }
+  Logger.log('Bienvenidas enviadas: ' + n + (faltan ? '. Faltan ' + faltan + ': vuelve a ejecutar.' : '. No queda nadie pendiente.'));
 }
 
 function guardarLugar(tok, l) {
