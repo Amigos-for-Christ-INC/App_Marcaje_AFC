@@ -1169,12 +1169,49 @@ function reporteADrive(tok, desde, hasta, tipo, lugar) {
 }
 
 /* ================= Respaldo mensual ================= */
+// ¿La cuenta que ejecuta puede escribir en esta carpeta? (las carpetas viejas pueden ser de otra cuenta)
+function puedoEscribir_(f) {
+  try {
+    const yo = Session.getEffectiveUser().getEmail();
+    if (f.getOwner() && f.getOwner().getEmail() === yo) return true;
+    const acc = f.getAccess(yo);
+    return acc === DriveApp.Permission.EDIT || acc === DriveApp.Permission.OWNER;
+  } catch (e) { return false; }
+}
+// Carpeta principal "Marcaje" de la cuenta dueña (si existe); ahí se crean las subcarpetas nuevas
+function carpetaMarcaje_() {
+  const p = props_(), id = p.getProperty('CARPETA_MARCAJE');
+  if (id) { try { const f = DriveApp.getFolderById(id); if (!f.isTrashed() && puedoEscribir_(f)) return f; } catch (e) {} }
+  try {
+    const it = DriveApp.getFoldersByName('Marcaje');
+    while (it.hasNext()) { const f = it.next(); if (!f.isTrashed() && puedoEscribir_(f)) { p.setProperty('CARPETA_MARCAJE', f.getId()); return f; } }
+  } catch (e) {}
+  return null;
+}
 function carpeta_(prop, nombre) {
   const p = props_(), id = p.getProperty(prop);
-  if (id) { try { const f = DriveApp.getFolderById(id); if (!f.isTrashed()) return f; } catch (e) {} }
-  const f = DriveApp.createFolder(nombre);
+  if (id) { try { const f = DriveApp.getFolderById(id); if (!f.isTrashed() && puedoEscribir_(f)) return f; } catch (e) {} }
+  const madre = carpetaMarcaje_();
+  const f = madre ? madre.createFolder(nombre) : DriveApp.createFolder(nombre);
   p.setProperty(prop, f.getId());
   return f;
+}
+
+// Ejecutar desde el editor si fallan reportes o respaldos: prueba cada paso con Drive y dice cuál falla
+function diagnosticoDrive() {
+  const yo = Session.getEffectiveUser().getEmail(), paso = (t, fn) => {
+    try { const r = fn(); Logger.log('OK   ' + t + (r ? ': ' + r : '')); return true; }
+    catch (e) { Logger.log('FALLA ' + t + ': ' + e.message); return false; } };
+  Logger.log('Cuenta que ejecuta: ' + yo);
+  paso('Leer la base de datos', () => { const f = DriveApp.getFileById(ss_().getId()); return f.getName() + ' (dueño: ' + f.getOwner().getEmail() + ')'; });
+  paso('Carpeta "Marcaje"', () => { const m = carpetaMarcaje_(); return m ? m.getName() + ' (se usará para las carpetas nuevas)' : 'no hay; las carpetas se crean en Mi unidad'; });
+  ['CARPETA_REPORTES', 'CARPETA_RESPALDOS'].forEach(k => paso('Carpeta guardada ' + k, () => {
+    const id = props_().getProperty(k); if (!id) return 'ninguna (se creará)';
+    const f = DriveApp.getFolderById(id); return f.getName() + ' | dueño: ' + f.getOwner().getEmail() + ' | puedo escribir: ' + (puedoEscribir_(f) ? 'sí' : 'NO, se creará otra');
+  }));
+  paso('Crear y mover un archivo de prueba', () => { const t = SpreadsheetApp.create('Prueba Marcaje (se borra sola)'); const f = DriveApp.getFileById(t.getId());
+    f.moveTo(carpeta_('CARPETA_REPORTES', 'Marcaje - Reportes')); f.setTrashed(true); return 'bien'; });
+  paso('Copiar la base (respaldo)', () => { const c = DriveApp.getFileById(ss_().getId()).makeCopy('Prueba respaldo (se borra sola)', carpeta_('CARPETA_RESPALDOS', 'Marcaje - Respaldos')); c.setTrashed(true); return 'bien'; });
 }
 
 // La ejecuta el activador automático el día 1 de cada mes (y el botón "Hacer respaldo ahora")
