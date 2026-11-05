@@ -910,6 +910,7 @@ function responderPermisoLider(token, id, decision, nota, reponerFecha, reponerH
   const rep = reponerFecha ? 'Reponer el ' + reponerFecha + ' (' + horasR + ' h)' : '';
   if (decision === 'Aprobado') {
     pushA_([res.correo], 'Tu líder aprobó tu permiso', 'Ahora falta la aprobación de Administración.' + (rep ? ' ' + rep + '.' : ''), 'permiso');
+    avisoAvanceLider_(emp, res, yo.nombre, nota, reponerFecha, horasR);
     avisarPermiso_(emp, res, { titulo: 'Listo para su aprobación final', asunto: 'Aprobado por el líder, falta Administración: ', conHoras: true,
       intro: yo.nombre + ' (líder) aprobó esta solicitud. Falta la decisión de Administración.',
       estado: { texto: 'Aprobado por el líder', color: '#1E7B45' }, boton: 'Abrir la App de Marcaje para decidir',
@@ -1011,6 +1012,26 @@ function responderPermiso(tok, id, estado, respuesta) {
   // Correo de confirmación al colaborador (con copia a su líder)
   confirmarPermiso_(r.emp, p, estado, a.nombre, respuesta);
   return 'Permiso ' + estado.toLowerCase() + '. Se envió la confirmación por correo a ' + p.nombre + '.';
+}
+
+// Correo al colaborador cuando su líder aprueba (falta Administración). Nunca detiene el proceso.
+function avisoAvanceLider_(emp, p, lider, nota, reponerFecha, horasR) {
+  try {
+    const fecha = (!p.hasta || p.hasta === p.desde) ? fechaTexto_(p.desde) : 'Del ' + fechaTexto_(p.desde) + ' al ' + fechaTexto_(p.hasta);
+    const filas = [['Tipo de permiso', p.tipo], ['Fecha', fecha], ['Aprobado por su líder', lider], ['Nota del líder', nota]];
+    if (reponerFecha) filas.push(['Reposición', fechaTexto_(reponerFecha) + ' (' + horasR + ' h)']);
+    enviarCorreo_({
+      to: correo_(p.correo), name: 'App de Marcaje AFC',
+      subject: 'Su líder aprobó su permiso: falta Administración (' + p.tipo + ', ' + rangoTxt_(p) + ')',
+      htmlBody: plantillaCorreo_({
+        titulo: 'Su líder aprobó su permiso', estado: { texto: 'Falta Administración', color: '#00758F' },
+        intro: 'Hola ' + (emp && emp.nombre || p.nombre) + ', su solicitud pasó a Administración para la aprobación final. Le avisaremos cuando la decidan.',
+        filas: filas, boton: 'Ver en la App de Marcaje', url: urlApp_()
+      })
+    });
+  } catch (err) {
+    console.error('No se pudo enviar el aviso al colaborador: ' + err);
+  }
 }
 
 // Correo al colaborador con la decisión (final, o rechazo del líder). Nunca detiene el proceso.
