@@ -23,7 +23,9 @@ const TIPOS_PERMISO = ['Permiso personal', 'Cita médica', 'Vacaciones', 'Llegad
 const LIBRE = 'LIBRE';             // Lugar = "Libre": puede marcar desde cualquier sitio (se guarda el GPS igual)
 
 /* ================= Web app ================= */
-function doGet() {
+function doGet(e) {
+  // Regreso del inicio de sesión de Microsoft al conectar el correo (conectarCorreoMicrosoft)
+  if (e && e.parameter && e.parameter.state && (e.parameter.code || e.parameter.error)) return regresoMicrosoftCorreo_(e.parameter);
   setupUnaVez_();
   return HtmlService.createHtmlOutputFromFile('Index')
     .setTitle('Control de asistencia | Amigos for Christ')
@@ -1178,26 +1180,81 @@ function aliasDisponible_(r) {
  */
 const TENANT_AFC = '3df804dd-19d4-414d-aea4-d693b7b73b45';
 function graphConfigurado_() { const p = props_(); return !!(p.getProperty('GRAPH_CLIENT_ID') && p.getProperty('GRAPH_SECRET')); }
+const SCOPES_CORREO = 'offline_access https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Mail.Send.Shared';
+// URL /exec de esta implementación (debe estar registrada en Entra como URI de redirección "Web")
+function urlRegresoMs_() {
+  return props_().getProperty('GRAPH_REDIRECT') || 'https://script.google.com/macros/s/AKfycbyJUuwkbhTXz-vnFaIMnzZpiLM47KFOcBOEFqNC_wrTnT3hxKyRWtXDoLgX5344pItA/exec';
+}
+function pedirTokenMs_(datos) {
+  const p = props_(), tenant = p.getProperty('GRAPH_TENANT') || TENANT_AFC;
+  datos.client_id = p.getProperty('GRAPH_CLIENT_ID'); datos.client_secret = p.getProperty('GRAPH_SECRET');
+  const res = UrlFetchApp.fetch('https://login.microsoftonline.com/' + tenant + '/oauth2/v2.0/token', { method: 'post', muteHttpExceptions: true, payload: datos });
+  const j = JSON.parse(res.getContentText() || '{}');
+  if (!j.access_token) throw new Error('Microsoft no dio el token (' + res.getResponseCode() + '): ' + (j.error_description || j.error || '').split('\n')[0]);
+  return j;
+}
 function tokenGraph_() {
   const cc = cache_(), t = cc.get('GRAPH_TOKEN');
   if (t) return t;
-  const p = props_(), tenant = p.getProperty('GRAPH_TENANT') || TENANT_AFC;
-  const res = UrlFetchApp.fetch('https://login.microsoftonline.com/' + tenant + '/oauth2/v2.0/token', {
-    method: 'post', muteHttpExceptions: true,
-    payload: { client_id: p.getProperty('GRAPH_CLIENT_ID'), client_secret: p.getProperty('GRAPH_SECRET'),
-      scope: 'https://graph.microsoft.com/.default', grant_type: 'client_credentials' }
-  });
-  const j = JSON.parse(res.getContentText() || '{}');
-  if (!j.access_token) throw new Error('Microsoft no dio el token (' + res.getResponseCode() + '): ' + (j.error_description || j.error || '').split('\n')[0]);
+  const p = props_(), refresh = p.getProperty('GRAPH_REFRESH');
+  let j;
+  if (refresh) {
+    // Modo cuenta conectada: el permiso es solo de esa cuenta (no hace falta PowerShell de Exchange)
+    j = pedirTokenMs_({ grant_type: 'refresh_token', refresh_token: refresh, scope: SCOPES_CORREO });
+    if (j.refresh_token) p.setProperty('GRAPH_REFRESH', j.refresh_token);
+  } else {
+    j = pedirTokenMs_({ grant_type: 'client_credentials', scope: 'https://graph.microsoft.com/.default' });
+  }
   cc.put('GRAPH_TOKEN', j.access_token, Math.max(60, Math.min(3000, (Number(j.expires_in) || 3600) - 300)));
   return j.access_token;
 }
+
+// PASO ÚNICO: ejecutar desde el editor y abrir el enlace del registro. Entrar con la cuenta dt@ (o con una que tenga
+// permiso "Enviar como" sobre dt@). Al terminar, la página dice "Correo conectado".
+function conectarCorreoMicrosoft() {
+  const p = props_();
+  if (!p.getProperty('GRAPH_CLIENT_ID') || !p.getProperty('GRAPH_SECRET')) throw new Error('Primero agrega GRAPH_CLIENT_ID y GRAPH_SECRET en las propiedades del script.');
+  const estado = Utilities.getUuid();
+  cache_().put('MS_ESTADO_' + estado, '1', 900);
+  const url = 'https://login.microsoftonline.com/' + (p.getProperty('GRAPH_TENANT') || TENANT_AFC) + '/oauth2/v2.0/authorize' +
+    '?client_id=' + encodeURIComponent(p.getProperty('GRAPH_CLIENT_ID')) + '&response_type=code&response_mode=query' +
+    '&redirect_uri=' + encodeURIComponent(urlRegresoMs_()) + '&scope=' + encodeURIComponent(SCOPES_CORREO) +
+    '&state=' + estado + '&prompt=select_account&login_hint=' + encodeURIComponent(remitente_());
+  Logger.log('Abre este enlace (vale 15 minutos) y entra con ' + remitente_() + ':\n' + url);
+  Logger.log('URI de redirección que debe estar en Entra (Autenticación > Web): ' + urlRegresoMs_());
+  return url;
+}
+function regresoMicrosoftCorreo_(q) {
+  const pag = (t, ok) => HtmlService.createHtmlOutput('<div style="font-family:Arial,sans-serif;max-width:480px;margin:40px auto;padding:24px;border-radius:12px;background:' +
+    (ok ? '#E6F2EC' : '#FBEAEA') + '"><h2 style="color:#0A2240">' + (ok ? 'Correo conectado' : 'No se pudo conectar') + '</h2><p>' + t + '</p></div>').setTitle('Correo de la app');
+  const x = s => String(s || '').replace(/[&<>"]/g, '');
+  if (!cache_().get('MS_ESTADO_' + q.state)) return pag('El enlace venció o ya se usó. Vuelve a ejecutar conectarCorreoMicrosoft.', false);
+  cache_().remove('MS_ESTADO_' + q.state);
+  if (q.error) return pag(x(q.error_description || q.error), false);
+  try {
+    const j = pedirTokenMs_({ grant_type: 'authorization_code', code: q.code, redirect_uri: urlRegresoMs_(), scope: SCOPES_CORREO });
+    if (!j.refresh_token) return pag('Microsoft no entregó el permiso permanente (offline_access).', false);
+    const yo = JSON.parse(UrlFetchApp.fetch('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName',
+      { headers: { Authorization: 'Bearer ' + j.access_token }, muteHttpExceptions: true }).getContentText() || '{}');
+    const p = props_();
+    p.setProperty('GRAPH_REFRESH', j.refresh_token);
+    p.setProperty('GRAPH_CUENTA', correo_(yo.mail || yo.userPrincipalName || ''));
+    cache_().remove('GRAPH_TOKEN');
+    return pag('La app enviará los correos desde ' + x(remitente_()) + ' usando la cuenta ' + x(yo.mail || yo.userPrincipalName) + '. Ya puedes cerrar esta página y ejecutar probarRemitente.', true);
+  } catch (err) {
+    return pag(x(err.message), false);
+  }
+}
 function enviarGraph_(r, m) {
   const para = String(m.to).split(/[,;\s]+/).filter(Boolean).map(a => ({ emailAddress: { address: a } }));
-  const res = UrlFetchApp.fetch('https://graph.microsoft.com/v1.0/users/' + encodeURIComponent(r) + '/sendMail', {
+  const p = props_(), delegado = !!p.getProperty('GRAPH_REFRESH'), cuenta = correo_(p.getProperty('GRAPH_CUENTA') || '');
+  const msg = { subject: m.subject, body: { contentType: 'HTML', content: m.htmlBody }, toRecipients: para };
+  if (delegado && cuenta && cuenta !== r) msg.from = { emailAddress: { address: r } };   // "Enviar como" dt@ desde otra cuenta
+  const url = delegado ? 'https://graph.microsoft.com/v1.0/me/sendMail' : 'https://graph.microsoft.com/v1.0/users/' + encodeURIComponent(r) + '/sendMail';
+  const res = UrlFetchApp.fetch(url, {
     method: 'post', contentType: 'application/json', muteHttpExceptions: true,
     headers: { Authorization: 'Bearer ' + tokenGraph_() },
-    payload: JSON.stringify({ message: { subject: m.subject, body: { contentType: 'HTML', content: m.htmlBody }, toRecipients: para }, saveToSentItems: true })
+    payload: JSON.stringify({ message: msg, saveToSentItems: true })
   });
   const code = res.getResponseCode();
   if (code === 401) cache_().remove('GRAPH_TOKEN');
