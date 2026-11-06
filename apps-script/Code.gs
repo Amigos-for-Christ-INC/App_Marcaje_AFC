@@ -72,9 +72,9 @@ function olvidarMemoria_() { _cfg = null; _emps = null; _lugs = null; }
 // Revisa/crea las hojas solo una vez cada 6 horas (no en cada petición)
 function setupUnaVez_() {
   const c = cache_();
-  if (c.get('SETUP_V9')) return;
+  if (c.get('SETUP_V10')) return;
   setup_();
-  c.put('SETUP_V9', '1', 21600);
+  c.put('SETUP_V10', '1', 21600);
 }
 
 function ss_() {
@@ -111,7 +111,7 @@ function setup_() {
   }
   // Horario de los recordatorios (se pueden cambiar en la hoja Config)
   const claves = cfg.getRange(1, 1, Math.max(cfg.getLastRow(), 1), 1).getDisplayValues().map(r => r[0]);
-  [['DIAS_LABORALES', '1,2,3,4,5'], ['AVISOS_ENTRADA', '08:00,08:15,08:30'], ['AVISOS_SALIDA', '17:00'], ['FERIADOS', ''], ['DOMINIO_MICROSOFT', 'amigosforchrist.org'], ['HORAS_DIA', '8'], ['CORREO_REMITENTE', 'dt@amigosforchrist.org'], ['PREFIJO_CORREO', '[Marcaje]']]
+  [['DIAS_LABORALES', '1,2,3,4,5'], ['AVISOS_ENTRADA', '08:00,08:15,08:30'], ['AVISOS_SALIDA', '17:00'], ['FERIADOS', ''], ['DOMINIO_MICROSOFT', 'amigosforchrist.org'], ['HORAS_DIA', '8'], ['CORREO_REMITENTE', 'dt@amigosforchrist.org'], ['PREFIJO_CORREO', '[Marcaje]'], ['CARPETA_OUTLOOK', 'Marcaje']]
     .forEach(([k, v]) => { if (claves.indexOf(k) < 0) writeText_(cfg, cfg.getLastRow() + 1, [[k, v]]); });
   _cfg = null;
 }
@@ -1420,7 +1420,13 @@ function aliasDisponible_(r) {
  */
 const TENANT_AFC = '3df804dd-19d4-414d-aea4-d693b7b73b45';
 function graphConfigurado_() { const p = props_(); return !!(p.getProperty('GRAPH_CLIENT_ID') && p.getProperty('GRAPH_SECRET')); }
-const SCOPES_CORREO = 'offline_access https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Mail.Send.Shared';
+const SCOPES_CORREO = 'offline_access https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Mail.Send.Shared https://graph.microsoft.com/Mail.ReadWrite';
+const SCOPES_CORREO_V1 = 'offline_access https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Mail.Send.Shared';
+// Permisos que se aceptaron al conectar (si se conectó antes de agregar Mail.ReadWrite, se siguen usando los de antes)
+function scopesConectados_() { return props_().getProperty('GRAPH_SCOPES') || SCOPES_CORREO_V1; }
+function puedeOrdenarCarpetas_() { return !!props_().getProperty('GRAPH_REFRESH') && /Mail\.ReadWrite/i.test(scopesConectados_()); }
+// Propiedad interna que marca los correos de esta app en el buzón (para encontrarlos en Elementos enviados)
+const PROP_APP_AFC = 'String {6a1f3c2e-8b4d-4e7a-9c1b-2d5e7f9a0b3c} Name AfcApp';
 // URL /exec de esta implementación (debe estar registrada en Entra como URI de redirección "Web")
 function urlRegresoMs_() {
   return props_().getProperty('GRAPH_REDIRECT') || 'https://script.google.com/macros/s/AKfycbyJUuwkbhTXz-vnFaIMnzZpiLM47KFOcBOEFqNC_wrTnT3hxKyRWtXDoLgX5344pItA/exec';
@@ -1440,7 +1446,7 @@ function tokenGraph_() {
   let j;
   if (refresh) {
     // Modo cuenta conectada: el permiso es solo de esa cuenta (no hace falta PowerShell de Exchange)
-    j = pedirTokenMs_({ grant_type: 'refresh_token', refresh_token: refresh, scope: SCOPES_CORREO });
+    j = pedirTokenMs_({ grant_type: 'refresh_token', refresh_token: refresh, scope: scopesConectados_() });
     if (j.refresh_token) p.setProperty('GRAPH_REFRESH', j.refresh_token);
   } else {
     j = pedirTokenMs_({ grant_type: 'client_credentials', scope: 'https://graph.microsoft.com/.default' });
@@ -1479,6 +1485,8 @@ function regresoMicrosoftCorreo_(q) {
     const p = props_();
     p.setProperty('GRAPH_REFRESH', j.refresh_token);
     p.setProperty('GRAPH_CUENTA', correo_(yo.mail || yo.userPrincipalName || ''));
+    p.setProperty('GRAPH_SCOPES', /Mail\.ReadWrite/i.test(j.scope || '') ? SCOPES_CORREO : SCOPES_CORREO_V1);
+    p.deleteProperty('OUTLOOK_CARPETA_ID');
     cache_().remove('GRAPH_TOKEN');
     return pag('La app enviará los correos desde ' + x(remitente_()) + ' usando la cuenta ' + x(yo.mail || yo.userPrincipalName) + '. Ya puedes cerrar esta página y ejecutar probarRemitente.', true);
   } catch (err) {
@@ -1489,14 +1497,20 @@ function enviarGraph_(r, m) {
   const para = String(m.to).split(/[,;\s]+/).filter(Boolean).map(a => ({ emailAddress: { address: a } }));
   const p = props_(), delegado = !!p.getProperty('GRAPH_REFRESH'), cuenta = correo_(p.getProperty('GRAPH_CUENTA') || '');
   const msg = { subject: m.subject, body: { contentType: 'HTML', content: m.htmlBody }, toRecipients: para,
-    internetMessageHeaders: [{ name: 'X-AFC-App', value: 'Marcaje' }] };   // encabezado para reglas de correo
+    internetMessageHeaders: [{ name: 'X-AFC-App', value: 'Marcaje' }],   // encabezado para reglas de correo
+    singleValueExtendedProperties: [{ id: PROP_APP_AFC, value: 'Marcaje' }] };   // marca para mover la copia enviada
   if (delegado && cuenta && cuenta !== r) msg.from = { emailAddress: { address: r } };   // "Enviar como" dt@ desde otra cuenta
   const url = delegado ? 'https://graph.microsoft.com/v1.0/me/sendMail' : 'https://graph.microsoft.com/v1.0/users/' + encodeURIComponent(r) + '/sendMail';
-  const res = UrlFetchApp.fetch(url, {
+  const enviar = () => UrlFetchApp.fetch(url, {
     method: 'post', contentType: 'application/json', muteHttpExceptions: true,
     headers: { Authorization: 'Bearer ' + tokenGraph_() },
     payload: JSON.stringify({ message: msg, saveToSentItems: true })
   });
+  let res = enviar();
+  if (res.getResponseCode() === 400) {   // si Microsoft no acepta las marcas internas, se envía sin ellas
+    delete msg.singleValueExtendedProperties; delete msg.internetMessageHeaders;
+    res = enviar();
+  }
   const code = res.getResponseCode();
   if (code === 401) cache_().remove('GRAPH_TOKEN');
   if (code !== 202) {
@@ -1504,6 +1518,50 @@ function enviarGraph_(r, m) {
     throw new Error('Microsoft 365 no envió el correo (' + code + '): ' + msg);
   }
 }
+/* --- Ordenar en Outlook: mover las copias enviadas a la carpeta "Marcaje" del buzón (Bandeja de entrada > Marcaje) ---
+ * Requiere el permiso delegado Mail.ReadWrite y haber vuelto a ejecutar conectarCorreoMicrosoft.
+ * Corre solo cada 10 minutos (desde revisarRecordatorios). Nombre de la carpeta: Config CARPETA_OUTLOOK. */
+function graphGet_(url) {
+  const res = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + tokenGraph_() }, muteHttpExceptions: true });
+  if (res.getResponseCode() >= 300) throw new Error('Graph ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
+  return JSON.parse(res.getContentText() || '{}');
+}
+function graphPost_(url, cuerpo) {
+  const res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', payload: JSON.stringify(cuerpo || {}),
+    headers: { Authorization: 'Bearer ' + tokenGraph_() }, muteHttpExceptions: true });
+  if (res.getResponseCode() >= 300) throw new Error('Graph ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
+  return JSON.parse(res.getContentText() || '{}');
+}
+function carpetaOutlook_() {
+  const p = props_(), id = p.getProperty('OUTLOOK_CARPETA_ID');
+  if (id) return id;
+  const nombre = String(cfg_('CARPETA_OUTLOOK') || 'Marcaje').trim();
+  const g = 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox/childFolders';
+  const hay = graphGet_(g + '?$top=100&$select=id,displayName').value || [];
+  let f = hay.find(x => String(x.displayName).toLowerCase() === nombre.toLowerCase());
+  if (!f) f = graphPost_(g, { displayName: nombre });
+  p.setProperty('OUTLOOK_CARPETA_ID', f.id);
+  return f.id;
+}
+function moverEnviadosOutlook_() {
+  if (!graphConfigurado_() || !puedeOrdenarCarpetas_()) return 0;
+  const destino = carpetaOutlook_();
+  const filtro = encodeURIComponent("singleValueExtendedProperties/Any(ep: ep/id eq '" + PROP_APP_AFC + "' and ep/value eq 'Marcaje')");
+  const lista = graphGet_('https://graph.microsoft.com/v1.0/me/mailFolders/sentitems/messages?$top=50&$select=id&$filter=' + filtro).value || [];
+  let n = 0;
+  lista.forEach(m => { try { graphPost_('https://graph.microsoft.com/v1.0/me/messages/' + m.id + '/move', { destinationId: destino }); n++; } catch (e) { console.error(e.message); } });
+  return n;
+}
+// Ejecutar desde el editor para probar: crea la carpeta si falta y mueve las copias enviadas que haya
+function probarCarpetaOutlook() {
+  if (!puedeOrdenarCarpetas_()) { Logger.log('FALTA: agrega el permiso delegado Mail.ReadWrite en Entra, concede el consentimiento y vuelve a ejecutar conectarCorreoMicrosoft.'); return; }
+  try {
+    props_().deleteProperty('OUTLOOK_CARPETA_ID');
+    Logger.log('Carpeta lista: Bandeja de entrada > ' + (cfg_('CARPETA_OUTLOOK') || 'Marcaje'));
+    Logger.log('OK: se movieron ' + moverEnviadosOutlook_() + ' correos enviados a esa carpeta. Los próximos se moverán solos cada 10 minutos.');
+  } catch (e) { Logger.log('FALLA: ' + e.message); }
+}
+
 // Cupo de correos: por Microsoft 365 el límite es el de Exchange, no el de Google
 function cupoCorreo_() { return graphConfigurado_() ? 10000 : MailApp.getRemainingDailyQuota(); }
 
@@ -1680,6 +1738,9 @@ function listaFechas_(t) {
 
 // Lo ejecuta el activador cada 5 minutos
 function revisarRecordatorios() {
+  // Cada 10 minutos: ordenar en Outlook las copias de los correos enviados
+  try { if (!cache_().get('ORDEN_OUTLOOK')) { cache_().put('ORDEN_OUTLOOK', '1', 600); moverEnviadosOutlook_(); } }
+  catch (e) { console.error('No se pudieron ordenar los correos en Outlook: ' + e.message); }
   if (!props_().getProperty('FCM_CUENTA_SERVICIO')) return;
   const ahora = new Date(), hoy = hoy_();
   const dia = Number(Utilities.formatDate(ahora, tz_(), 'u'));               // 1 = lunes ... 7 = domingo
